@@ -9,7 +9,6 @@
 #include "iommu-sva.h"
 
 static DEFINE_MUTEX(iommu_sva_lock);
-static DECLARE_IOASID_SET(iommu_sva_pasid);
 
 /**
  * iommu_sva_alloc_pasid - Allocate a PASID for the mm
@@ -40,7 +39,7 @@ int iommu_sva_alloc_pasid(struct mm_struct *mm, ioasid_t min, ioasid_t max)
 		goto out;
 	}
 
-	pasid = ioasid_alloc(&iommu_sva_pasid, min, max, mm);
+	pasid = ioasid_alloc(NULL, min, max, mm, 0);
 	if (!pasid_valid(pasid))
 		ret = -ENOMEM;
 	else
@@ -67,7 +66,7 @@ static bool __mmget_not_zero(void *mm)
  */
 struct mm_struct *iommu_sva_find(ioasid_t pasid)
 {
-	return ioasid_find(&iommu_sva_pasid, pasid, __mmget_not_zero);
+	return ioasid_find(NULL, pasid, __mmget_not_zero);
 }
 EXPORT_SYMBOL_GPL(iommu_sva_find);
 
