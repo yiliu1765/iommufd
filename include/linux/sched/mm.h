@@ -466,7 +466,7 @@ static inline void mm_pasid_set(struct mm_struct *mm, u32 pasid)
 static inline void mm_pasid_drop(struct mm_struct *mm)
 {
 	if (pasid_valid(mm->pasid)) {
-		ioasid_free(mm->pasid);
+		ioasid_put(NULL, mm->pasid);
 		mm->pasid = INVALID_IOASID;
 	}
 }
