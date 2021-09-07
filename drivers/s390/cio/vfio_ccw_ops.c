@@ -16,8 +16,6 @@
 
 #include "vfio_ccw_private.h"
 
-static const struct vfio_device_ops vfio_ccw_dev_ops;
-
 static int vfio_ccw_mdev_reset(struct vfio_ccw_private *private)
 {
 	/*
@@ -60,29 +58,31 @@ static int vfio_ccw_mdev_notifier(struct notifier_block *nb,
 
 static int vfio_ccw_mdev_probe(struct mdev_device *mdev)
 {
-	struct vfio_ccw_private *private = dev_get_drvdata(mdev->dev.parent);
+	struct subchannel *sch = to_subchannel(mdev->dev.parent);
+	struct vfio_ccw_private *private;
 	int ret;
 
 	if (private->state == VFIO_CCW_STATE_NOT_OPER)
 		return -ENODEV;
 
-	memset(&private->vdev, 0, sizeof(private->vdev));
-	vfio_init_group_dev(&private->vdev, &mdev->dev,
-			    &vfio_ccw_dev_ops);
+	private = vfio_ccw_alloc_private(mdev, sch);
+	if (IS_ERR(private))
+		return PTR_ERR(private);
 
 	VFIO_CCW_MSG_EVENT(2, "sch %x.%x.%04x: create\n",
-			   private->sch->schid.cssid,
-			   private->sch->schid.ssid,
-			   private->sch->schid.sch_no);
+			   sch->schid.cssid,
+			   sch->schid.ssid,
+			   sch->schid.sch_no);
 
 	ret = vfio_register_emulated_iommu_dev(&private->vdev);
 	if (ret)
-		goto err_atomic;
+		goto err_alloc;
 	dev_set_drvdata(&mdev->dev, private);
+	dev_set_drvdata(&sch->dev, private);
 	return 0;
 
-err_atomic:
-	vfio_uninit_group_dev(&private->vdev);
+err_alloc:
+	vfio_ccw_free_private(private);
 	return ret;
 }
 
@@ -95,11 +95,12 @@ static void vfio_ccw_mdev_remove(struct mdev_device *mdev)
 			   private->sch->schid.ssid,
 			   private->sch->schid.sch_no);
 
+	dev_set_drvdata(&private->sch->dev, NULL);
 	vfio_unregister_group_dev(&private->vdev);
 
 	vfio_ccw_fsm_event(private, VFIO_CCW_EVENT_CLOSE);
 
-	vfio_uninit_group_dev(&private->vdev);
+	vfio_ccw_free_private(private);
 }
 
 static int vfio_ccw_mdev_open_device(struct vfio_device *vdev)
@@ -569,7 +570,7 @@ static void vfio_ccw_mdev_request(struct vfio_device *vdev, unsigned int count)
 	}
 }
 
-static const struct vfio_device_ops vfio_ccw_dev_ops = {
+const struct vfio_device_ops vfio_ccw_dev_ops = {
 	.open_device = vfio_ccw_mdev_open_device,
 	.close_device = vfio_ccw_mdev_close_device,
 	.read = vfio_ccw_mdev_read,
