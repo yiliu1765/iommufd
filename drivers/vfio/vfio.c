@@ -454,10 +454,11 @@ static void vfio_device_put(struct vfio_device *device)
 		complete(&device->comp);
 }
 
-static bool vfio_device_try_get(struct vfio_device *device)
+bool vfio_device_try_get(struct vfio_device *device)
 {
 	return refcount_inc_not_zero(&device->refcount);
 }
+EXPORT_SYMBOL_GPL(vfio_device_try_get);
 
 static struct vfio_device *vfio_group_get_device(struct vfio_group *group,
 						 struct device *dev)
