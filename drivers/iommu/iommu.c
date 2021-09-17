@@ -47,6 +47,7 @@ struct iommu_group {
 	struct list_head entry;
 	unsigned long user_dma_owner_id;
 	refcount_t owner_cnt;
+	refcount_t attach_cnt;
 };
 
 struct group_device {
@@ -1994,7 +1995,7 @@ static int __iommu_attach_device(struct iommu_domain *domain,
 int iommu_attach_device(struct iommu_domain *domain, struct device *dev)
 {
 	struct iommu_group *group;
-	int ret;
+	int ret = 0;
 
 	group = iommu_group_get(dev);
 	if (!group)
@@ -2005,11 +2006,23 @@ int iommu_attach_device(struct iommu_domain *domain, struct device *dev)
 	 * change while we are attaching
 	 */
 	mutex_lock(&group->mutex);
-	ret = -EINVAL;
-	if (iommu_group_device_count(group) != 1)
+	if (group->user_dma_owner_id) {
+		if (group->domain) {
+			if (group->domain != domain)
+				ret = -EBUSY;
+			else
+				refcount_inc(&group->attach_cnt);
+
+			goto out_unlock;
+		}
+	} else if (iommu_group_device_count(group) != 1) {
+		ret = -EINVAL;
 		goto out_unlock;
+	}
 
 	ret = __iommu_attach_group(domain, group);
+	if (!ret && group->user_dma_owner_id)
+		refcount_set(&group->attach_cnt, 1);
 
 out_unlock:
 	mutex_unlock(&group->mutex);
@@ -2261,7 +2274,10 @@ void iommu_detach_device(struct iommu_domain *domain, struct device *dev)
 		return;
 
 	mutex_lock(&group->mutex);
-	if (iommu_group_device_count(group) != 1) {
+	if (group->user_dma_owner_id) {
+		if (!refcount_dec_and_test(&group->attach_cnt))
+			goto out_unlock;
+	} else if (iommu_group_device_count(group) != 1) {
 		WARN_ON(1);
 		goto out_unlock;
 	}
@@ -3368,6 +3384,7 @@ static int iommu_group_init_user_dma(struct iommu_group *group,
 
 	group->user_dma_owner_id = owner;
 	refcount_set(&group->owner_cnt, 1);
+	refcount_set(&group->attach_cnt, 0);
 
 	/* default domain is unsafe for user-initiated dma */
 	if (group->domain == group->default_domain)
