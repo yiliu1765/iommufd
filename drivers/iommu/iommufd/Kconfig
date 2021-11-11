@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config IOMMUFD
+	tristate "IOMMU Userspace API"
+	select INTERVAL_TREE
+	select IOMMU_API
+	default n
+	help
+	  Provides a unified I/O address space management framework for
+	  isolating untrusted DMAs via devices which are passed through
+	  to userspace drivers.
+
+	  If you don't know what to do here, say N.
