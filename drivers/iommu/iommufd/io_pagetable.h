@@ -46,7 +46,17 @@ struct iopt_area {
 	unsigned int page_offset;
 	/* IOMMU_READ, IOMMU_WRITE, etc */
 	int iommu_prot;
+	bool prevent_users : 1;
 	unsigned int num_users;
+};
+
+struct iopt_allowed {
+	struct interval_tree_node node;
+};
+
+struct iopt_reserved {
+	struct interval_tree_node node;
+	void *owner;
 };
 
 int iopt_area_fill_domains(struct iopt_area *area, struct iopt_pages *pages);
@@ -109,6 +119,8 @@ static inline size_t iopt_area_length(struct iopt_area *area)
 	}
 
 __make_iopt_iter(area)
+__make_iopt_iter(allowed)
+__make_iopt_iter(reserved)
 
 /*
  * This holds a pinned page list for multiple areas of IO address space. The

@@ -10,8 +10,16 @@
 #include <linux/errno.h>
 #include <linux/err.h>
 
+struct page;
 struct iommufd_ctx;
+struct io_pagetable;
 struct file;
+
+int iopt_access_pages(struct io_pagetable *iopt, unsigned long iova,
+		      unsigned long length, struct page **out_pages,
+		      bool write);
+void iopt_unaccess_pages(struct io_pagetable *iopt, unsigned long iova,
+			 unsigned long length);
 
 void iommufd_ctx_get(struct iommufd_ctx *ictx);
 
