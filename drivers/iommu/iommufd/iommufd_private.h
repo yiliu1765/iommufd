@@ -93,6 +93,7 @@ static inline int iommufd_ucmd_respond(struct iommufd_ucmd *ucmd,
 enum iommufd_object_type {
 	IOMMUFD_OBJ_NONE,
 	IOMMUFD_OBJ_ANY = IOMMUFD_OBJ_NONE,
+	IOMMUFD_OBJ_HW_PAGETABLE,
 	IOMMUFD_OBJ_IOAS_PAGETABLE,
 	IOMMUFD_OBJ_MAX,
 };
@@ -173,4 +174,30 @@ int iommufd_ioas_pagetable_iova_ranges(struct iommufd_ucmd *ucmd);
 int iommufd_ioas_pagetable_map(struct iommufd_ucmd *ucmd);
 int iommufd_ioas_pagetable_copy(struct iommufd_ucmd *ucmd);
 int iommufd_ioas_pagetable_unmap(struct iommufd_ucmd *ucmd);
+
+/*
+ * A HW pagetable is called an iommu_domain inside the kernel. This user object
+ * allows directly creating and inspecting the domains. Domains that have kernel
+ * owned page tables will be associated with an iommufd_ioas_pagetable that
+ * provides the IOVA to PFN map.
+ */
+struct iommufd_hw_pagetable {
+	struct iommufd_object obj;
+	struct iommufd_ioas_pagetable *ioaspt;
+	struct iommu_domain *domain;
+	/* Head at iommufd_ioas_pagetable::auto_domains */
+	struct list_head auto_domains_item;
+	struct mutex devices_lock;
+	struct list_head devices;
+};
+
+struct iommufd_hw_pagetable *
+iommufd_hw_pagetable_from_id(struct iommufd_ctx *ictx, u32 pt_id,
+			     struct device *dev);
+void iommufd_hw_pagetable_put(struct iommufd_ctx *ictx,
+			      struct iommufd_hw_pagetable *hwpt);
+void iommufd_hw_pagetable_destroy(struct iommufd_object *obj);
+
+void iommufd_device_destroy(struct iommufd_object *obj);
+
 #endif
