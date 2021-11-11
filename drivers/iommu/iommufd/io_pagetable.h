@@ -46,7 +46,17 @@ struct iopt_area {
 	unsigned int page_offset;
 	/* IOMMU_READ, IOMMU_WRITE, etc */
 	int iommu_prot;
+	bool prevent_users : 1;
 	unsigned int num_accesses;
+};
+
+struct iopt_allowed {
+	struct interval_tree_node node;
+};
+
+struct iopt_reserved {
+	struct interval_tree_node node;
+	void *owner;
 };
 
 int iopt_area_fill_domains(struct iopt_area *area, struct iopt_pages *pages);
@@ -82,6 +92,18 @@ static inline size_t iopt_area_length(struct iopt_area *area)
 	return (area->node.last - area->node.start) + 1;
 }
 
+/*
+ * Number of bytes from the start of the iopt_pages that the iova begins.
+ * iopt_area_start_byte() / PAGE_SIZE encodes the starting page index
+ * iopt_area_start_byte() % PAGE_SIZE encodes the offset within that page
+ */
+static inline unsigned long iopt_area_start_byte(struct iopt_area *area,
+						 unsigned long iova)
+{
+	return (iova - iopt_area_iova(area)) + area->page_offset +
+	       iopt_area_index(area) * PAGE_SIZE;
+}
+
 #define __make_iopt_iter(name)                                                 \
 	static inline struct iopt_##name *iopt_##name##_iter_first(            \
 		struct io_pagetable *iopt, unsigned long start,                \
@@ -109,6 +131,8 @@ static inline size_t iopt_area_length(struct iopt_area *area)
 	}
 
 __make_iopt_iter(area)
+__make_iopt_iter(allowed)
+__make_iopt_iter(reserved)
 
 /*
  * This holds a pinned page list for multiple areas of IO address space. The
@@ -158,9 +182,11 @@ void iopt_pages_unfill_xarray(struct iopt_pages *pages, unsigned long start,
 
 int iopt_pages_add_access(struct iopt_pages *pages, unsigned long start,
 			unsigned long last, struct page **out_pages,
-			bool write);
+			unsigned int flags);
 void iopt_pages_remove_access(struct iopt_area *area, unsigned long start,
 			    unsigned long last);
+int iopt_pages_rw_access(struct iopt_pages *pages, unsigned long start_byte,
+			 void *data, unsigned long length, unsigned int flags);
 
 /*
  * Each interval represents an active iopt_access_pages(), it acts as an
