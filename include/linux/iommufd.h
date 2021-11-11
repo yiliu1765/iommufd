@@ -9,11 +9,25 @@
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/err.h>
+#include <linux/device.h>
 
 struct page;
+struct iommufd_device;
 struct iommufd_ctx;
 struct io_pagetable;
 struct file;
+
+struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
+					   struct device *dev, u32 *id);
+void iommufd_device_unbind(struct iommufd_device *idev);
+bool iommufd_device_enforced_coherent(struct iommufd_device *idev);
+
+enum {
+	IOMMUFD_ATTACH_FLAGS_ALLOW_UNSAFE_INTERRUPT = 1 << 0,
+};
+int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id,
+			  unsigned int flags);
+void iommufd_device_detach(struct iommufd_device *idev);
 
 int iopt_access_pages(struct io_pagetable *iopt, unsigned long iova,
 		      unsigned long length, struct page **out_pages,
