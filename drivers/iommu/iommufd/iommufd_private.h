@@ -95,6 +95,7 @@ static inline int iommufd_ucmd_respond(struct iommufd_ucmd *ucmd,
 enum iommufd_object_type {
 	IOMMUFD_OBJ_NONE,
 	IOMMUFD_OBJ_ANY = IOMMUFD_OBJ_NONE,
+	IOMMUFD_OBJ_DEVICE,
 	IOMMUFD_OBJ_HW_PAGETABLE,
 	IOMMUFD_OBJ_IOAS_PAGETABLE,
 	IOMMUFD_OBJ_MAX,
@@ -208,5 +209,7 @@ iommufd_hw_pagetable_from_id(struct iommufd_ctx *ictx, u32 pt_id,
 void iommufd_hw_pagetable_put(struct iommufd_ctx *ictx,
 			      struct iommufd_hw_pagetable *hwpt);
 void iommufd_hw_pagetable_destroy(struct iommufd_object *obj);
+
+void iommufd_device_destroy(struct iommufd_object *obj);
 
 #endif
