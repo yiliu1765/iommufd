@@ -192,6 +192,10 @@ static int iommufd_fops_release(struct inode *inode, struct file *filp)
 }
 
 union ucmd_buffer {
+	struct iommu_ioas_pagetable_alloc alloc;
+	struct iommu_ioas_pagetable_iova_ranges iova_ranges;
+	struct iommu_ioas_pagetable_map map;
+	struct iommu_ioas_pagetable_unmap unmap;
 	struct iommu_destroy destroy;
 };
 
@@ -213,6 +217,17 @@ struct iommufd_ioctl_op {
 	}
 static struct iommufd_ioctl_op iommufd_ioctl_ops[] = {
 	IOCTL_OP(IOMMU_DESTROY, iommufd_destroy, struct iommu_destroy, id),
+	IOCTL_OP(IOMMU_IOAS_PAGETABLE_ALLOC, iommufd_ioas_pagetable_alloc,
+		 struct iommu_ioas_pagetable_alloc, out_ioas_id),
+	IOCTL_OP(IOMMU_IOAS_PAGETABLE_COPY, iommufd_ioas_pagetable_copy,
+		 struct iommu_ioas_pagetable_copy, src_iova),
+	IOCTL_OP(IOMMU_IOAS_PAGETABLE_IOVA_RANGES,
+		 iommufd_ioas_pagetable_iova_ranges,
+		 struct iommu_ioas_pagetable_iova_ranges, __reserved),
+	IOCTL_OP(IOMMU_IOAS_PAGETABLE_MAP, iommufd_ioas_pagetable_map,
+		 struct iommu_ioas_pagetable_map, __reserved),
+	IOCTL_OP(IOMMU_IOAS_PAGETABLE_UNMAP, iommufd_ioas_pagetable_unmap,
+		 struct iommu_ioas_pagetable_unmap, length),
 };
 
 static long iommufd_fops_ioctl(struct file *filp, unsigned int cmd,
@@ -284,6 +299,9 @@ struct iommufd_ctx *iommufd_fget(int fd)
 }
 
 static struct iommufd_object_ops iommufd_object_ops[] = {
+	[IOMMUFD_OBJ_IOAS_PAGETABLE] = {
+		.destroy = iommufd_ioas_pagetable_destroy,
+	},
 };
 
 static struct miscdevice iommu_misc_dev = {
