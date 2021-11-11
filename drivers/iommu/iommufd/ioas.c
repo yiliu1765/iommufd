@@ -17,6 +17,7 @@ void iommufd_ioas_destroy(struct iommufd_object *obj)
 	rc = iopt_unmap_all(&ioas->iopt, NULL);
 	WARN_ON(rc && rc != -ENOENT);
 	iopt_destroy_table(&ioas->iopt);
+	mutex_destroy(&ioas->mutex);
 }
 
 struct iommufd_ioas *iommufd_ioas_alloc(struct iommufd_ctx *ictx)
@@ -31,6 +32,9 @@ struct iommufd_ioas *iommufd_ioas_alloc(struct iommufd_ctx *ictx)
 	rc = iopt_init_table(&ioas->iopt);
 	if (rc)
 		goto out_abort;
+
+	INIT_LIST_HEAD(&ioas->hwpt_list);
+	mutex_init(&ioas->mutex);
 	return ioas;
 
 out_abort:
@@ -313,4 +317,20 @@ int iommufd_ioas_unmap(struct iommufd_ucmd *ucmd)
 out_put:
 	iommufd_put_object(&ioas->obj);
 	return rc;
+}
+
+bool iommufd_ioas_enforced_coherent(struct iommufd_ioas *ioas)
+{
+	struct iommufd_hw_pagetable *hwpt;
+	bool ret = true;
+
+	mutex_lock(&ioas->mutex);
+	list_for_each_entry(hwpt, &ioas->hwpt_list, hwpt_item) {
+		if (!hwpt->enforce_cache_coherency) {
+			ret = false;
+			break;
+		}
+	}
+	mutex_unlock(&ioas->mutex);
+	return ret;
 }
