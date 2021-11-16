@@ -44,6 +44,7 @@ struct vfio_group {
 	struct cdev			cdev;
 	refcount_t			users;
 	unsigned int			container_users;
+	unsigned int			device_cdev_open_cnt;
 	struct iommu_group		*iommu_group;
 	struct vfio_container		*container;
 	struct list_head		device_list;
@@ -74,6 +75,12 @@ void vfio_group_register_device(struct vfio_device *device);
 void vfio_group_unregister_device(struct vfio_device *device);
 bool vfio_group_find_device(struct vfio_group *group,
 			    struct vfio_device *device);
+bool vfio_group_opened(struct vfio_group *group);
+void vfio_group_down_write(struct vfio_group *group);
+void vfio_group_up_write(struct vfio_group *group);
+bool vfio_group_device_cdev_opened(struct vfio_group *group);
+void vfio_group_inc_device_cdev_cnt(struct vfio_group *group);
+void vfio_group_dec_device_cdev_cnt(struct vfio_group *group);
 int vfio_group_open_device(struct vfio_device *device);
 void vfio_group_close_device(struct vfio_device *device);
 bool vfio_is_group_file(struct file *file);

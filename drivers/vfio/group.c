@@ -340,6 +340,22 @@ static struct vfio_device *vfio_device_get_from_name(struct vfio_group *group,
  * VFIO Group fd, /dev/vfio/$GROUP
  */
 
+bool vfio_group_opened(struct vfio_group *group)
+{
+	return group->opened_file;
+}
+
+void vfio_group_down_write(struct vfio_group *group)
+{
+	down_write(&group->group_rwsem);
+}
+
+void vfio_group_up_write(struct vfio_group *group)
+{
+	lockdep_assert_held_write(&group->group_rwsem);
+	up_write(&group->group_rwsem);
+}
+
 static bool vfio_group_has_iommu(struct vfio_group *group)
 {
 	lockdep_assert_held(&group->group_rwsem);
@@ -348,6 +364,28 @@ static bool vfio_group_has_iommu(struct vfio_group *group)
 	else
 		WARN_ON(!group->container_users);
 	return group->container || group->iommufd;
+}
+
+bool vfio_group_device_cdev_opened(struct vfio_group *group)
+{
+	lockdep_assert_held_write(&group->group_rwsem);
+	return group->device_cdev_open_cnt;
+}
+
+void vfio_group_inc_device_cdev_cnt(struct vfio_group *group)
+{
+	lockdep_assert_held_write(&group->group_rwsem);
+	group->device_cdev_open_cnt++;
+}
+
+void vfio_group_dec_device_cdev_cnt(struct vfio_group *group)
+{
+	lockdep_assert_held_write(&group->group_rwsem);
+	if (!group->device_cdev_open_cnt) {
+		WARN_ON(1);
+		return;
+	}
+	group->device_cdev_open_cnt--;
 }
 
 /*
@@ -545,7 +583,9 @@ static int vfio_group_ioctl_get_device_fd(struct vfio_group *group,
 		goto err_put_device;
 	}
 
+	mutex_lock(&device->dev_set->lock);
 	ret = vfio_device_open(device);
+	mutex_unlock(&device->dev_set->lock);
 	if (ret)
 		goto err_put_fdno;
 
@@ -640,7 +680,7 @@ static int vfio_group_fops_open(struct inode *inode, struct file *filep)
 	/*
 	 * Do we need multiple instances of the group open?  Seems not.
 	 */
-	if (group->opened_file) {
+	if (vfio_group_opened(group) || group->device_cdev_open_cnt) {
 		ret = -EBUSY;
 		goto err_put;
 	}
