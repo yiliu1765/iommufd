@@ -14,6 +14,7 @@
 #include <linux/workqueue.h>
 #include <linux/poll.h>
 #include <uapi/linux/vfio.h>
+#include <linux/cdev.h>
 
 struct kvm;
 
@@ -40,7 +41,8 @@ struct vfio_device {
 	struct kvm *kvm;
 
 	/* Members below here are private, not for driver use */
-	struct kref kref; /* object life circle */
+	struct device device;
+	struct cdev cdev;
 	struct rcu_head rcu;
 	refcount_t refcount; /* user count */
 	unsigned int open_count;
