@@ -6,4 +6,6 @@ iommufd-y := \
 	ioas_pt.o \
 	main.o
 
+iommufd-$(CONFIG_IOMMUFD_TEST) += selftest.o
+
 obj-$(CONFIG_IOMMUFD) += iommufd.o

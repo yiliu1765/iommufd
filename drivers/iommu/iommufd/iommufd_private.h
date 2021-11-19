@@ -201,4 +201,6 @@ void iommufd_hw_pagetable_destroy(struct iommufd_object *obj);
 
 void iommufd_device_destroy(struct iommufd_object *obj);
 
+int iommufd_test(struct iommufd_ucmd *ucmd);
+
 #endif

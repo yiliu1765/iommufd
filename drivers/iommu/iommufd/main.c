@@ -24,6 +24,7 @@
 #include <uapi/linux/iommufd.h>
 
 #include "iommufd_private.h"
+#include "iommufd_test.h"
 
 struct iommufd_object_ops {
 	void (*destroy)(struct iommufd_object *obj);
@@ -197,6 +198,9 @@ union ucmd_buffer {
 	struct iommu_ioas_pagetable_map map;
 	struct iommu_ioas_pagetable_unmap unmap;
 	struct iommu_destroy destroy;
+#ifdef CONFIG_IOMMUFD_TEST
+	struct iommu_test_cmd test;
+#endif
 };
 
 struct iommufd_ioctl_op {
@@ -228,6 +232,10 @@ static struct iommufd_ioctl_op iommufd_ioctl_ops[] = {
 		 struct iommu_ioas_pagetable_map, __reserved),
 	IOCTL_OP(IOMMU_IOAS_PAGETABLE_UNMAP, iommufd_ioas_pagetable_unmap,
 		 struct iommu_ioas_pagetable_unmap, length),
+#ifdef CONFIG_IOMMUFD_TEST
+	IOCTL_OP(IOMMU_TEST_CMD, iommufd_test,
+		 struct iommu_test_cmd, last),
+#endif
 };
 
 static long iommufd_fops_ioctl(struct file *filp, unsigned int cmd,
