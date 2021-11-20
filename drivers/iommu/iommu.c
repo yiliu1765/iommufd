@@ -50,6 +50,7 @@ struct iommu_group {
 	struct list_head entry;
 	enum iommu_dma_owner dma_owner;
 	refcount_t owner_cnt;
+	refcount_t attach_cnt;
 	void *owner_cookie;
 };
 
@@ -2026,6 +2027,41 @@ out_unlock:
 }
 EXPORT_SYMBOL_GPL(iommu_attach_device);
 
+int iommu_attach_device_shared(struct iommu_domain *domain, struct device *dev)
+{
+	struct iommu_group *group;
+	int ret = 0;
+
+	group = iommu_group_get(dev);
+	if (!group)
+		return -ENODEV;
+
+	mutex_lock(&group->mutex);
+	if (refcount_inc_not_zero(&group->attach_cnt)) {
+		if (group->domain != domain ||
+		    (group->dma_owner != DMA_OWNER_PRIVATE_DOMAIN &&
+		     group->dma_owner != DMA_OWNER_PRIVATE_DOMAIN_USER)) {
+			refcount_dec(&group->attach_cnt);
+			ret = -EBUSY;
+		}
+
+		goto unlock_out;
+	}
+
+	ret = __iommu_attach_group(domain, group);
+	if (ret)
+		goto unlock_out;
+
+	refcount_set(&group->attach_cnt, 1);
+
+unlock_out:
+	mutex_unlock(&group->mutex);
+	iommu_group_put(group);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(iommu_attach_device_shared);
+
 int iommu_deferred_attach(struct device *dev, struct iommu_domain *domain)
 {
 	const struct iommu_ops *ops = domain->ops;
@@ -2280,6 +2316,31 @@ out_unlock:
 	iommu_group_put(group);
 }
 EXPORT_SYMBOL_GPL(iommu_detach_device);
+
+void iommu_detach_device_shared(struct iommu_domain *domain, struct device *dev)
+{
+	struct iommu_group *group;
+
+	group = iommu_group_get(dev);
+	if (!group)
+		return;
+
+	mutex_lock(&group->mutex);
+	if (WARN_ON(group->domain != domain ||
+		    (group->dma_owner != DMA_OWNER_PRIVATE_DOMAIN &&
+		     group->dma_owner != DMA_OWNER_PRIVATE_DOMAIN_USER)))
+		goto unlock_out;
+
+	if (refcount_dec_and_test(&group->attach_cnt)) {
+		__iommu_detach_group(domain, group);
+		group->dma_owner = DMA_OWNER_NONE;
+	}
+
+unlock_out:
+	mutex_unlock(&group->mutex);
+	iommu_group_put(group);
+}
+EXPORT_SYMBOL_GPL(iommu_detach_device_shared);
 
 struct iommu_domain *iommu_get_domain_for_dev(struct device *dev)
 {
