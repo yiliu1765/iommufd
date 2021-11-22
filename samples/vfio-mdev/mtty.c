@@ -732,13 +732,12 @@ static int mtty_probe(struct mdev_device *mdev)
 				     &avail_ports,
 				     avail_ports - type->nr_ports));
 
-	mdev_state = kzalloc(sizeof(struct mdev_state), GFP_KERNEL);
+	mdev_state = vfio_alloc_device(mdev_state, vdev,
+				       &mdev->dev, &mtty_dev_ops);
 	if (mdev_state == NULL) {
 		ret = -ENOMEM;
 		goto err_nr_ports;
 	}
-
-	vfio_init_group_dev(&mdev_state->vdev, &mdev->dev, &mtty_dev_ops);
 
 	mdev_state->nr_ports = type->nr_ports;
 	mdev_state->irq_index = -1;
@@ -749,7 +748,7 @@ static int mtty_probe(struct mdev_device *mdev)
 	mdev_state->vconfig = kzalloc(MTTY_CONFIG_SPACE_SIZE, GFP_KERNEL);
 	if (mdev_state->vconfig == NULL) {
 		ret = -ENOMEM;
-		goto err_state;
+		goto err_out;
 	}
 
 	mutex_init(&mdev_state->ops_lock);
@@ -759,15 +758,12 @@ static int mtty_probe(struct mdev_device *mdev)
 
 	ret = vfio_register_emulated_iommu_dev(&mdev_state->vdev);
 	if (ret)
-		goto err_vconfig;
+		goto err_out;
 	dev_set_drvdata(&mdev->dev, mdev_state);
 	return 0;
 
-err_vconfig:
-	kfree(mdev_state->vconfig);
-err_state:
-	vfio_uninit_group_dev(&mdev_state->vdev);
-	kfree(mdev_state);
+err_out:
+	vfio_put_device(&mdev_state->vdev);
 err_nr_ports:
 	atomic_add(type->nr_ports, &mdev_avail_ports);
 	return ret;
@@ -779,11 +775,17 @@ static void mtty_remove(struct mdev_device *mdev)
 	int nr_ports = mdev_state->nr_ports;
 
 	vfio_unregister_group_dev(&mdev_state->vdev);
+	vfio_put_device(&mdev_state->vdev);
+	atomic_add(nr_ports, &mdev_avail_ports);
+}
+
+
+static void mtty_release(struct vfio_device *vdev)
+{
+	struct mdev_state *mdev_state =
+		container_of(vdev, struct mdev_state, vdev);
 
 	kfree(mdev_state->vconfig);
-	vfio_uninit_group_dev(&mdev_state->vdev);
-	kfree(mdev_state);
-	atomic_add(nr_ports, &mdev_avail_ports);
 }
 
 static int mtty_reset(struct mdev_state *mdev_state)
@@ -1256,6 +1258,7 @@ static unsigned int mtty_get_available(struct mdev_type *mtype)
 
 static const struct vfio_device_ops mtty_dev_ops = {
 	.name = "vfio-mtty",
+	.release = mtty_release,
 	.read = mtty_read,
 	.write = mtty_write,
 	.ioctl = mtty_ioctl,
