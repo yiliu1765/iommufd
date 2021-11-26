@@ -488,7 +488,7 @@ static void vfio_device_release(struct kref *kref)
 	if (device->ops && device->ops->release)
 		device->ops->release(device);
 
-	kvfree(device);
+	kvfree_rcu(device, rcu);
 }
 
 /*
