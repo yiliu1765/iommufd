@@ -79,6 +79,7 @@ struct amba_driver {
 	void			(*remove)(struct amba_device *);
 	void			(*shutdown)(struct amba_device *);
 	const struct amba_id	*id_table;
+	bool suppress_auto_claim_dma_owner;
 };
 
 /*
