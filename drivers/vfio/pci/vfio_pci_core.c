@@ -658,6 +658,7 @@ int vfio_pci_core_bind_iommufd(struct vfio_device *core_vdev,
 	}
 
 	vdev->idev = idev;
+	vdev->ioaspt_id = IOMMUFD_INVALID_ID;
 	bind->out_devid = id;
 
 out_unlock:
@@ -673,12 +674,80 @@ void vfio_pci_core_unbind_iommufd(struct vfio_device *core_vdev)
 
 	mutex_lock(&vdev->idev_lock);
 	if (vdev->idev) {
+		if (vdev->ioaspt_id != IOMMUFD_INVALID_ID) {
+			vdev->iommufd = -1;
+			vdev->ioaspt_id = IOMMUFD_INVALID_ID;
+			iommufd_device_detach(vdev->idev);
+		}
 		iommufd_unbind_device(vdev->idev);
 		vdev->idev = NULL;
 	}
 	mutex_unlock(&vdev->idev_lock);
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_unbind_iommufd);
+
+int vfio_pci_core_attach_ioaspt(struct vfio_device *core_vdev,
+				struct vfio_device_attach_ioaspt *attach)
+{
+	struct vfio_pci_core_device *vdev =
+		container_of(core_vdev, struct vfio_pci_core_device, vdev);
+	u32 pt_id = attach->ioaspt_id;
+	int ret;
+
+	mutex_lock(&vdev->idev_lock);
+
+	if (!vdev->idev) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
+	/* Currently only allows one IOAS attach */
+	if (vdev->ioaspt_id != IOMMUFD_INVALID_ID) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+
+	ret = iommufd_device_attach(vdev->idev, &pt_id);
+	if (ret)
+		goto out_unlock;
+
+	vdev->iommufd = attach->iommufd;
+	vdev->ioaspt_id = attach->ioaspt_id;
+	attach->out_hwpt_id = pt_id;
+
+out_unlock:
+	mutex_unlock(&vdev->idev_lock);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(vfio_pci_core_attach_ioaspt);
+
+void vfio_pci_core_detach_ioaspt(struct vfio_device *core_vdev,
+				 struct vfio_device_detach_ioaspt *detach)
+{
+	struct vfio_pci_core_device *vdev =
+		container_of(core_vdev, struct vfio_pci_core_device, vdev);
+
+	mutex_lock(&vdev->idev_lock);
+
+	if (!vdev)
+		goto out_unlock;
+
+	if (vdev->ioaspt_id == IOMMUFD_INVALID_ID)
+		goto out_unlock;
+
+	if (vdev->iommufd != detach->iommufd ||
+	    vdev->ioaspt_id != detach->ioaspt_id)
+		goto out_unlock;
+
+	vdev->iommufd = -1;
+	vdev->ioaspt_id = IOMMUFD_INVALID_ID;
+	iommufd_device_detach(vdev->idev);
+
+out_unlock:
+	mutex_unlock(&vdev->idev_lock);
+}
+EXPORT_SYMBOL_GPL(vfio_pci_core_detach_ioaspt);
 
 long vfio_pci_core_ioctl(struct vfio_device *core_vdev, unsigned int cmd,
 		unsigned long arg)

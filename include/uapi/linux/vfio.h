@@ -225,6 +225,55 @@ struct vfio_device_bind_iommufd {
 
 #define VFIO_DEVICE_BIND_IOMMUFD	_IO(VFIO_TYPE, VFIO_BASE + 19)
 
+/*
+ * VFIO_DEVICE_ATTACH_IOASPT - _IOW(VFIO_TYPE, VFIO_BASE + 21,
+ *				struct vfio_device_attach_ioaspt)
+ *
+ * Attach a vfio device to the specified IOAS Page Table.
+ *
+ * Multiple vfio devices can be attached to the same IOAS Page Table. One
+ * device can be attached to only one ioas at this point.
+ *
+ * @argsz:	user filled size of this data.
+ * @flags:	reserved for future extension.
+ * @iommufd:	iommufd where the ioas comes from.
+ * @ioaspt_id:	Input the target I/O address space page table.
+ * @hwpt_id:	Output the hw page table id
+ *
+ * Return: 0 on success, -errno on failure.
+ */
+struct vfio_device_attach_ioaspt {
+	__u32	argsz;
+	__u32	flags;
+	__s32	iommufd;
+	__u32	ioaspt_id;
+	__u32	out_hwpt_id;
+};
+
+#define VFIO_DEVICE_ATTACH_IOASPT	_IO(VFIO_TYPE, VFIO_BASE + 20)
+
+/*
+ * VFIO_DEVICE_DETACH_IOASPT - _IOW(VFIO_TYPE, VFIO_BASE + 21,
+ *				struct vfio_device_detach_ioaspt)
+ *
+ * Detach a vfio device to the specified IOAS Page Table.
+ *
+ * @argsz:	user filled size of this data.
+ * @flags:	reserved for future extension.
+ * @iommufd:	iommufd where the ioas comes from.
+ * @ioaspt_id:	Input the target I/O address space page table.
+ *
+ * Return: 0 on success, -errno on failure.
+ */
+struct vfio_device_detach_ioaspt {
+	__u32	argsz;
+	__u32	flags;
+	__s32	iommufd;
+	__u32	ioaspt_id;
+};
+
+#define VFIO_DEVICE_DETACH_IOASPT	_IO(VFIO_TYPE, VFIO_BASE + 21)
+
 /**
  * VFIO_DEVICE_GET_INFO - _IOR(VFIO_TYPE, VFIO_BASE + 7,
  *						struct vfio_device_info)
