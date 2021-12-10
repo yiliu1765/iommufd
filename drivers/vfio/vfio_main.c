@@ -1454,6 +1454,76 @@ static long vfio_device_bind_iommufd(struct file *filep, unsigned long arg)
 			    sizeof(bind.out_devid)) ? -EFAULT : 0;
 }
 
+static inline bool vfio_device_in_container(struct vfio_device *device)
+{
+	return device->group->container || device->group->iommufd;
+}
+
+static long vfio_device_attach_ioas(struct vfio_device *device,
+				    unsigned long arg)
+{
+	struct vfio_device_attach_ioas attach;
+	unsigned long minsz;
+	u32 pt_id;
+	int rc;
+
+	minsz = offsetofend(struct vfio_device_attach_ioas, ioas_id);
+	if (copy_from_user(&attach, (void __user *)arg, minsz))
+		return -EFAULT;
+
+	if (attach.argsz < minsz || attach.flags ||
+	    attach.iommufd < 0 || attach.ioas_id == IOMMUFD_INVALID_ID)
+		return -EINVAL;
+
+	/* not allowed if the device is opened in legacy interface */
+	if (vfio_device_in_container(device))
+		return -EBUSY;
+
+	if (unlikely(!device->ops->attach_ioas))
+		return -EINVAL;
+
+	pt_id = attach.ioas_id;
+
+	down_write(&device->group->group_rwsem);
+	rc = device->ops->attach_ioas(device, &pt_id);
+	up_write(&device->group->group_rwsem);
+	if (rc)
+		return rc;
+
+	attach.out_hwpt_id = pt_id;
+
+	return copy_to_user((void __user *)arg + minsz,
+			    &attach.out_hwpt_id,
+			    sizeof(attach.out_hwpt_id)) ? -EFAULT : 0;
+}
+
+static long vfio_device_detach_hwpt(struct vfio_device *device,
+				    unsigned long arg)
+{
+	struct vfio_device_detach_hwpt detach;
+	unsigned long minsz;
+
+	minsz = offsetofend(struct vfio_device_detach_hwpt, flags);
+	if (copy_from_user(&detach, (void __user *)arg, minsz))
+		return -EFAULT;
+
+	if (detach.argsz < minsz || detach.flags)
+		return -EINVAL;
+
+	/* not allowed if the device is opened in legacy interface */
+	if (vfio_device_in_container(device))
+		return -EBUSY;
+
+	if (unlikely(!device->ops->attach_ioas))
+		return -EINVAL;
+
+	down_write(&device->group->group_rwsem);
+	device->ops->attach_ioas(device, NULL);
+	up_write(&device->group->group_rwsem);
+
+	return 0;
+}
+
 static long vfio_device_fops_unl_ioctl(struct file *filep,
 				       unsigned int cmd, unsigned long arg)
 {
@@ -1474,6 +1544,10 @@ static long vfio_device_fops_unl_ioctl(struct file *filep,
 		return ret;
 
 	switch (cmd) {
+	case VFIO_DEVICE_ATTACH_IOAS:
+		return vfio_device_attach_ioas(device, arg);
+	case VFIO_DEVICE_DETACH_HWPT:
+		return vfio_device_detach_hwpt(device, arg);
 	case VFIO_DEVICE_FEATURE:
 		ret = vfio_ioctl_device_feature(device, (void __user *)arg);
 		break;
