@@ -142,6 +142,8 @@ struct vfio_pci_core_device {
 	struct rw_semaphore	memory_lock;
 	struct mutex		idev_lock;
 	struct iommufd_device	*idev;
+	int			iommufd;
+	u32			hwpt_id;
 };
 
 #define is_intx(vdev) (vdev->irq_type == VFIO_PCI_INTX_IRQ_INDEX)
@@ -226,6 +228,10 @@ void vfio_pci_core_release(struct vfio_device *core_dev);
 int vfio_pci_core_bind_iommufd(struct vfio_device *core_vdev,
 			       struct vfio_device_bind_iommufd *bind);
 void vfio_pci_core_unbind_iommufd(struct vfio_device *core_vdev);
+int vfio_pci_core_attach_ioas(struct vfio_device *core_vdev,
+			      struct vfio_device_attach_ioas *attach);
+void vfio_pci_core_detach_hwpt(struct vfio_device *core_vdev,
+			       struct vfio_device_detach_hwpt *detach);
 void vfio_pci_core_close_device(struct vfio_device *core_vdev);
 void vfio_pci_core_init_device(struct vfio_pci_core_device *vdev,
 			       struct pci_dev *pdev);
