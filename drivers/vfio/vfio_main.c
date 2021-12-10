@@ -905,6 +905,94 @@ out_put_fd:
 	return ret;
 }
 
+static long vfio_device_attach_iommufd(struct vfio_device *device,
+				       unsigned long arg)
+{
+	struct vfio_device_attach_iommufd attach;
+	unsigned long minsz;
+	u32 pt_id;
+	int ret;
+
+	minsz = offsetofend(struct vfio_device_attach_iommufd, ioas_id);
+	if (copy_from_user(&attach, (void __user *)arg, minsz))
+		return -EFAULT;
+
+	if (attach.argsz < minsz || attach.flags ||
+	    attach.iommufd < 0 || attach.ioas_id == IOMMUFD_INVALID_ID)
+		return -EINVAL;
+
+	if (unlikely(!device->ops->attach_ioas))
+		return -EINVAL;
+
+	mutex_lock(&device->dev_set->lock);
+
+	/*
+	 * Not allowed if group is opened. Here no need to hold
+	 * group->group_rwsem as the group opened won't change
+	 * between group open and close. So it's ok to read it in
+	 * the device fd ioctl.
+	 */
+	if (vfio_group_opened(device->group)) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+
+	pt_id = attach.ioas_id;
+
+	ret = device->ops->attach_ioas(device, &pt_id);
+	if (ret)
+		goto out_unlock;
+
+	attach.out_hwpt_id = pt_id;
+
+	ret = copy_to_user((void __user *)arg + minsz,
+			   &attach.out_hwpt_id,
+			   sizeof(attach.out_hwpt_id)) ? -EFAULT : 0;
+	if (ret)
+		device->ops->attach_ioas(device, NULL);
+
+out_unlock:
+	mutex_unlock(&device->dev_set->lock);
+	return ret;
+}
+
+static long vfio_device_detach_iommufd(struct vfio_device *device,
+				       unsigned long arg)
+{
+	struct vfio_device_detach_iommufd detach;
+	unsigned long minsz;
+	int ret = 0;
+
+	minsz = offsetofend(struct vfio_device_detach_iommufd, flags);
+	if (copy_from_user(&detach, (void __user *)arg, minsz))
+		return -EFAULT;
+
+	if (detach.argsz < minsz || detach.flags)
+		return -EINVAL;
+
+	if (unlikely(!device->ops->attach_ioas))
+		return -EINVAL;
+
+	mutex_lock(&device->dev_set->lock);
+
+	/*
+	 * Not allowed if group is opened. Here no need to hold
+	 * group->group_rwsem as the group opened won't change
+	 * between group open and close. So it's ok to read it in
+	 * the device fd ioctl.
+	 */
+	if (vfio_group_opened(device->group)) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+
+	device->ops->attach_ioas(device, NULL);
+
+out_unlock:
+	mutex_lock(&device->dev_set->lock);
+	return ret;
+}
+
 static long vfio_device_fops_unl_ioctl(struct file *filep,
 				       unsigned int cmd, unsigned long arg)
 {
@@ -926,6 +1014,10 @@ static long vfio_device_fops_unl_ioctl(struct file *filep,
 		return ret;
 
 	switch (cmd) {
+	case VFIO_DEVICE_ATTACH_IOMMUFD:
+		return vfio_device_attach_iommufd(device, arg);
+	case VFIO_DEVICE_DETACH_IOMMUFD:
+		return vfio_device_detach_iommufd(device, arg);
 	case VFIO_DEVICE_FEATURE:
 		ret = vfio_ioctl_device_feature(device, (void __user *)arg);
 		break;

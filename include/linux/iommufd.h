@@ -11,6 +11,8 @@
 #include <linux/err.h>
 #include <linux/device.h>
 
+#define IOMMUFD_INVALID_ID 0
+
 struct page;
 struct iommufd_device;
 struct iommufd_access;
