@@ -47,6 +47,14 @@ struct iopt_area {
 	atomic_t num_users;
 };
 
+int iopt_area_fill_domains(struct iopt_area *area, struct iopt_pages *pages);
+void iopt_area_unfill_domains(struct iopt_area *area, struct iopt_pages *pages);
+
+int iopt_area_fill_domain(struct iopt_area *area, struct iommu_domain *domain);
+void iopt_area_unfill_domain(struct iopt_area *area, struct iopt_pages *pages,
+			     struct iommu_domain *domain);
+void iopt_unmap_domain(struct io_pagetable *iopt, struct iommu_domain *domain);
+
 static inline unsigned long iopt_area_index(struct iopt_area *area)
 {
 	return area->pages_node.start;
@@ -65,6 +73,37 @@ static inline unsigned long iopt_area_iova(struct iopt_area *area)
 static inline unsigned long iopt_area_last_iova(struct iopt_area *area)
 {
 	return area->node.last;
+}
+
+static inline size_t iopt_area_length(struct iopt_area *area)
+{
+	return (area->node.last - area->node.start) + 1;
+}
+
+static inline struct iopt_area *iopt_area_iter_first(struct io_pagetable *iopt,
+						     unsigned long start,
+						     unsigned long last)
+{
+	struct interval_tree_node *node;
+
+	lockdep_assert_held(&iopt->iova_rwsem);
+
+	node = interval_tree_iter_first(&iopt->area_itree, start, last);
+	if (!node)
+		return NULL;
+	return container_of(node, struct iopt_area, node);
+}
+
+static inline struct iopt_area *iopt_area_iter_next(struct iopt_area *area,
+						    unsigned long start,
+						    unsigned long last)
+{
+	struct interval_tree_node *node;
+
+	node = interval_tree_iter_next(&area->node, start, last);
+	if (!node)
+		return NULL;
+	return container_of(node, struct iopt_area, node);
 }
 
 /*
@@ -96,6 +135,36 @@ struct iopt_pages {
 	struct rb_root_cached users_itree;
 	/* Of iopt_area::pages_node */
 	struct rb_root_cached domains_itree;
+};
+
+struct iopt_pages *iopt_alloc_pages(void __user *uptr, unsigned long length,
+				    bool writable);
+void iopt_release_pages(struct kref *kref);
+static inline void iopt_put_pages(struct iopt_pages *pages)
+{
+	kref_put(&pages->kref, iopt_release_pages);
+}
+
+void iopt_pages_fill_from_xarray(struct iopt_pages *pages, unsigned long start,
+				 unsigned long last, struct page **out_pages);
+int iopt_pages_fill_xarray(struct iopt_pages *pages, unsigned long start,
+			   unsigned long last, struct page **out_pages);
+void iopt_pages_unfill_xarray(struct iopt_pages *pages, unsigned long start,
+			      unsigned long last);
+
+int iopt_pages_add_user(struct iopt_pages *pages, unsigned long start,
+			unsigned long last, struct page **out_pages,
+			bool write);
+void iopt_pages_remove_user(struct iopt_pages *pages, unsigned long start,
+			    unsigned long last);
+
+/*
+ * Each interval represents an active iopt_access_pages(), it acts as an
+ * interval lock that keeps the PFNs pinned and stored in the xarray.
+ */
+struct iopt_pages_user {
+	struct interval_tree_node node;
+	refcount_t refcount;
 };
 
 #endif
