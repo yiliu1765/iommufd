@@ -72,6 +72,8 @@ void iommufd_ctx_get(struct iommufd_ctx *ictx);
 struct iommufd_ctx *iommufd_ctx_from_file(struct file *file);
 void iommufd_ctx_put(struct iommufd_ctx *ictx);
 
+int iommufd_vfio_compat_ioas_id(struct iommufd_ctx *ictx, u32 *out_ioas_id);
+
 int iommufd_access_rw(struct iommufd_access *access, unsigned long iova,
 		      void *data, size_t len, bool write);
 #else /* !CONFIG_IOMMUFD */
@@ -82,6 +84,12 @@ static inline struct iommufd_ctx *iommufd_ctx_from_file(struct file *file)
 
 static inline void iommufd_ctx_put(struct iommufd_ctx *ictx)
 {
+}
+
+static inline int iommufd_vfio_compat_ioas_id(struct iommufd_ctx *ictx,
+					      u32 *out_ioas_id)
+{
+	return -EOPNOTSUPP;
 }
 
 static inline int iommufd_access_rw(struct iommufd_access *access, unsigned long iova,
