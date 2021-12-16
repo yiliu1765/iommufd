@@ -67,6 +67,8 @@ iommufd_hw_pagetable_auto_get(struct iommufd_ctx *ictx,
 	hwpt->ioaspt = ioaspt;
 	/* The calling driver is a user until iommufd_hw_pagetable_put() */
 	refcount_inc(&ioaspt->obj.users);
+	/* Balance with the first decrement in iommufd_object_destroy_user() */
+	refcount_inc(&hwpt->obj.users);
 
 	list_add_tail(&hwpt->auto_domains_item, &ioaspt->auto_domains);
 	iommufd_object_finalize(ictx, &hwpt->obj);
@@ -104,7 +106,7 @@ iommufd_hw_pagetable_from_id(struct iommufd_ctx *ictx, u32 pt_id,
 		struct iommufd_hw_pagetable *hwpt;
 
 		hwpt = iommufd_hw_pagetable_auto_get(ictx, ioaspt, dev);
-		iommufd_put_object_keep_user(obj);
+		iommufd_put_object(obj);
 		return hwpt;
 	}
 	default:
