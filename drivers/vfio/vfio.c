@@ -84,6 +84,8 @@ struct vfio_group {
 	struct kvm			*kvm;
 	struct file			*opened_file;
 	struct blocking_notifier_head	notifier;
+	void				*iommufd;
+	u32				hwpt_id;
 };
 
 #ifdef CONFIG_VFIO_NOIOMMU
@@ -434,7 +436,7 @@ static void vfio_group_put(struct vfio_group *group)
 	 * properly hold the group reference.
 	 */
 	WARN_ON(!list_empty(&group->device_list));
-	WARN_ON(group->container || group->container_users);
+	WARN_ON(group->container || group->iommufd || group->container_users);
 	WARN_ON(group->notifier.head);
 
 	list_del(&group->vfio_next);
@@ -1032,6 +1034,13 @@ static void __vfio_group_unset_container(struct vfio_group *group)
 
 	lockdep_assert_held_write(&group->group_rwsem);
 
+	if (group->iommufd) {
+		vfio_group_unset_iommufd(group->iommufd,
+					 &group->device_list);
+		group->iommufd = NULL;
+		return;
+	}
+
 	down_write(&container->group_lock);
 
 	driver = container->iommu_driver;
@@ -1069,7 +1078,7 @@ static int vfio_group_unset_container(struct vfio_group *group)
 {
 	lockdep_assert_held_write(&group->group_rwsem);
 
-	if (!group->container)
+	if (!group->container || !group->iommufd)
 		return -EINVAL;
 	if (group->container_users != 1)
 		return -EBUSY;
@@ -1082,15 +1091,25 @@ static int vfio_group_set_container(struct vfio_group *group, int container_fd)
 	struct fd f;
 	struct vfio_container *container;
 	struct vfio_iommu_driver *driver;
+	u32 hwpt_id;
 	int ret = 0;
 
 	lockdep_assert_held_write(&group->group_rwsem);
 
-	if (group->container || WARN_ON(group->container_users))
+	if (group->container || group->iommufd || WARN_ON(group->container_users))
 		return -EINVAL;
 
 	if (group->type == VFIO_NO_IOMMU && !capable(CAP_SYS_RAWIO))
 		return -EPERM;
+
+	group->iommufd = vfio_group_set_iommufd(container_fd,
+						&group->device_list,
+						&hwpt_id);
+	if (group->iommufd) {
+		group->container_users = 1;
+		group->hwpt_id = hwpt_id;
+		return ret;
+	}
 
 	f = fdget(container_fd);
 	if (!f.file)
@@ -1157,7 +1176,7 @@ static bool vfio_assert_device_open(struct vfio_device *device)
 
 static bool vfio_device_in_container(struct vfio_device *device)
 {
-	return device->group->container;
+	return device->group->container || device->group->iommufd;
 }
 
 static int vfio_device_assign_container(struct vfio_device *device)
@@ -1166,7 +1185,8 @@ static int vfio_device_assign_container(struct vfio_device *device)
 
 	lockdep_assert_held_write(&group->group_rwsem);
 
-	if (!group->container || !group->container->iommu_driver ||
+	if ((group->container && !group->container->iommu_driver) ||
+	    (!group->container && !group->iommufd) ||
 	    WARN_ON(!group->container_users))
 		return -EINVAL;
 
@@ -1355,7 +1375,7 @@ static long vfio_group_fops_unl_ioctl(struct file *filep,
 		status.flags = 0;
 
 		down_read(&group->group_rwsem);
-		if (group->container)
+		if (group->container || group->iommufd)
 			status.flags |= VFIO_GROUP_FLAGS_CONTAINER_SET |
 					VFIO_GROUP_FLAGS_VIABLE;
 		else if (!iommu_group_dma_owner_claimed(group->iommu_group))
@@ -1455,7 +1475,7 @@ static int vfio_group_fops_release(struct inode *inode, struct file *filep)
 	 * is only called when there are no open devices.
 	 */
 	WARN_ON(group->notifier.head);
-	if (group->container) {
+	if (group->container || group->iommufd) {
 		WARN_ON(group->container_users != 1);
 		__vfio_group_unset_container(group);
 	}
@@ -1997,6 +2017,8 @@ bool vfio_file_enforced_coherent(struct file *file)
 	if (group->container) {
 		ret = vfio_ioctl_check_extension(group->container,
 						 VFIO_DMA_CC_IOMMU);
+	} else if (group->iommufd) {
+		ret = iommufd_vfio_check_extension(VFIO_DMA_CC_IOMMU);
 	} else {
 		/*
 		 * Since the coherency state is determined only once a container
