@@ -111,6 +111,11 @@ int iommufd_ioas_pagetable_iova_ranges(struct iommufd_ucmd *ucmd)
 		}
 		cmd->out_num_iovas++;
 	}
+
+	if (cmd->out_num_iovas > max_iovas) {
+		cmd->size = sizeof(*cmd) + cmd->out_num_iovas * sizeof(cmd->out_valid_iovas[0]);
+	}
+
 	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
 	if (rc)
 		goto out_put;
