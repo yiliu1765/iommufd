@@ -28,9 +28,8 @@ out_unlock:
 /*
  * Only attaching a group should cause a default creation of the internal ioas,
  * this returns the existing ioas if it has already been assigned somehow
- * FIXME: maybe_unused
  */
-static __maybe_unused struct iommufd_ioas *
+static struct iommufd_ioas *
 create_compat_ioas(struct iommufd_ctx *ictx)
 {
 	struct iommufd_ioas *ioas = NULL;
@@ -158,7 +157,7 @@ static int iommufd_vfio_unmap_dma(struct iommufd_ctx *ictx, unsigned int cmd,
 	return rc;
 }
 
-static int iommufd_vfio_check_extension(unsigned long type)
+int iommufd_vfio_check_extension(unsigned long type)
 {
 	switch (type) {
 	case VFIO_TYPE1v2_IOMMU:
@@ -210,6 +209,7 @@ static int iommufd_vfio_check_extension(unsigned long type)
   * review along side HW drivers implementing it.
   */
 }
+EXPORT_SYMBOL_GPL(iommufd_vfio_check_extension);
 
 static int iommufd_vfio_set_iommu(struct iommufd_ctx *ictx, unsigned long type)
 {
@@ -403,3 +403,132 @@ int iommufd_vfio_ioctl(struct iommufd_ctx *ictx, unsigned int cmd,
 	}
 	return -ENOIOCTLCMD;
 }
+
+static void vfio_device_detach_unbind(struct vfio_device *device,
+				      int iommufd)
+{
+	struct vfio_device_detach_hwpt detach = {
+				.argsz = sizeof(detach),
+				.iommufd = iommufd,
+				};
+
+	if (device->ops->detach_hwpt)
+		device->ops->detach_hwpt(device, &detach);
+	if (device->ops->unbind_iommufd)
+		device->ops->unbind_iommufd(device);
+}
+
+static int vfio_device_bind_attach(struct vfio_device *device,
+				   struct vfio_device_bind_iommufd *bind,
+				   struct vfio_device_attach_ioas *attach)
+{
+	int rc;
+
+	if (!device->ops->bind_iommufd || !device->ops->unbind_iommufd ||
+	    !device->ops->attach_ioas || !device->ops->detach_hwpt)
+		return -ENOENT;
+
+	rc = device->ops->bind_iommufd(device, bind);
+	if (rc)
+		return rc;
+
+	rc = device->ops->attach_ioas(device, attach);
+	if (rc)
+		device->ops->unbind_iommufd(device);
+
+	return rc;
+}
+
+struct iommufd_ctx *
+vfio_group_set_iommufd(int fd, struct list_head *device_list, u32 *hwpt_id)
+{
+	struct vfio_device_attach_ioas attach = { .argsz = sizeof(attach) };
+	struct vfio_device_bind_iommufd bind = { .argsz = sizeof(bind) };
+	struct iommufd_ctx *ictx = iommufd_fget(fd);
+	struct iommufd_ioas *ioas;
+	struct vfio_device *device;
+	u32 pt_id;
+	int rc;
+
+	if (!ictx)
+		return ictx;
+
+	mutex_lock(&ictx->vfio_compat);
+
+	ictx->vfio_fd = fd;
+
+	/*
+	 * Note: bind.dev_cookie is designed for page fault, whose uAPI is TBD
+	 * on IOMMUFD. And VFIO does not support that either. So we here leave
+	 * the dev_cookie to 0 for now, until it is available in VFIO too.
+	 */
+	bind.dev_cookie = 0;
+	bind.iommufd = fd;
+	attach.iommufd = fd;
+
+	ioas = create_compat_ioas(ictx);
+	if (IS_ERR(ioas))
+		goto out_fput;
+
+	ictx->vfio_ioas = ioas;
+	attach.ioas_id = ioas->obj.id;
+	attach.out_hwpt_id = IOMMUFD_INVALID_ID;
+
+	iommufd_put_object(&ioas->obj);
+
+	pt_id = IOMMUFD_INVALID_ID;
+	list_for_each_entry(device, device_list, group_next) {
+		rc = vfio_device_bind_attach(device, &bind, &attach);
+		if (rc)
+			goto unwind;
+
+		if (pt_id == IOMMUFD_INVALID_ID)
+			pt_id = attach.out_hwpt_id;
+		else if (unlikely(pt_id != attach.out_hwpt_id)) {
+			vfio_device_detach_unbind(device, fd);
+			goto unwind;
+		}
+	}
+
+	*hwpt_id = pt_id;
+	ictx->groups++;
+	mutex_unlock(&ictx->vfio_compat);
+	return ictx;
+unwind:
+	list_for_each_entry_continue_reverse(device, device_list, group_next)
+		vfio_device_detach_unbind(device, fd);
+	iommufd_ioas_destroy(&ioas->obj);
+out_fput:
+	mutex_unlock(&ictx->vfio_compat);
+	fput(ictx->filp);
+
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(vfio_group_set_iommufd);
+
+void vfio_group_unset_iommufd(void *iommufd, struct list_head *device_list)
+{
+	struct iommufd_ctx *ictx = (struct iommufd_ctx *)iommufd;
+	struct iommufd_ioas *ioas;
+	struct vfio_device *device;
+	int fd;
+
+	if (!ictx)
+		return;
+	mutex_lock(&ictx->vfio_compat);
+	ioas = get_compat_ioas(ictx);
+	if (IS_ERR(ioas))
+		return;
+
+	fd = ictx->vfio_fd;
+	iommufd_put_object(&ioas->obj);
+
+	list_for_each_entry(device, device_list, group_next)
+		vfio_device_detach_unbind(device, fd);
+
+	if (--ictx->groups == 0)
+		iommufd_ioas_destroy(&ioas->obj);
+	mutex_unlock(&ictx->vfio_compat);
+	fput(ictx->filp);
+}
+EXPORT_SYMBOL_GPL(vfio_group_unset_iommufd);
