@@ -15,6 +15,7 @@
 
 struct pci_dev;
 struct iommufd_device;
+struct iommufd_ctx;
 
 #if IS_ENABLED(CONFIG_IOMMUFD)
 struct iommufd_device *iommufd_bind_device(int fd, struct device *dev, u32 *id);
@@ -27,6 +28,10 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id,
 			  unsigned int flags);
 void iommufd_device_detach(struct iommufd_device *idev);
 
+struct iommufd_ctx *
+vfio_group_set_iommufd(int fd, struct list_head *device_list, u32 *hwpt_id);
+void vfio_group_unset_iommufd(void *iommufd, struct list_head *device_list);
+int iommufd_vfio_check_extension(unsigned long type);
 #else /* !CONFIG_IOMMUFD */
 static inline struct iommufd_device *
 iommufd_bind_device(int fd, struct device *dev, u32 *id)
@@ -46,6 +51,22 @@ static inline int iommufd_device_attach(struct iommufd_device *idev,
 
 static inline void iommufd_device_detach(struct iommufd_device *idev)
 {
+}
+
+static inline struct iommufd_ctx *
+vfio_group_set_iommufd(int fd, struct list_head *device_list, u32 *hwpt_id)
+{
+	return NULL;
+}
+
+static inline void vfio_group_unset_iommufd(void *iommufd,
+					    struct list_head *device_list)
+{
+}
+
+static int iommufd_vfio_check_extension(unsigned long type)
+{
+	return 0;
 }
 #endif /* CONFIG_IOMMUFD */
 #endif
