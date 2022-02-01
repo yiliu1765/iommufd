@@ -68,6 +68,7 @@ struct iommufd_ctx {
 	struct xarray objects;
 
 	struct iommufd_ioas *vfio_ioas;
+	int vfio_fd;
 };
 
 struct iommufd_ctx *iommufd_fget(int fd);
