@@ -218,7 +218,7 @@ static bool batch_add_pfn(struct pfn_batch *batch, unsigned long pfn)
 	if (batch->end &&
 	    pfn == batch->pfns[batch->end - 1] + batch->npfns[batch->end - 1]) {
 		batch->total_pfns++;
-		if (batch->npfns[batch->end - 1]++ == U16_MAX) {
+		if (batch->npfns[batch->end - 1]++ == U16_MAX - 1) {
 			if (batch->end == batch->array_size)
 				return false;
 			batch->pfns[batch->end] = pfn;
