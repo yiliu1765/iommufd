@@ -379,6 +379,21 @@ static void batch_from_pages(struct pfn_batch *batch, struct page **pages,
 			break;
 }
 
+/*
+ * Some mappings aren't backed by a struct page, for example an mmap'd
+ * MMIO range for our own or another device.  These use a different
+ * pfn conversion and shouldn't be tracked as locked pages.
+ * For compound pages, any driver that sets the reserved bit in head
+ * page needs to set the reserved bit in all subpages to be safe.
+ */
+static bool is_invalid_reserved_pfn(unsigned long pfn)
+{
+	if (pfn_valid(pfn))
+		return PageReserved(pfn_to_page(pfn));
+
+	return true;
+}
+
 static void batch_unpin(struct pfn_batch *batch, struct iopt_pages *pages,
 			unsigned int offset, size_t npages)
 {
@@ -394,10 +409,13 @@ static void batch_unpin(struct pfn_batch *batch, struct iopt_pages *pages,
 	while (npages) {
 		size_t to_unpin =
 			min_t(size_t, npages, batch->npfns[cur] - offset);
+		unsigned long pfn = batch->pfns[cur] + offset;
 
-		unpin_user_page_range_dirty_lock(
-			pfn_to_page(batch->pfns[cur] + offset), to_unpin,
-			pages->writable);
+		if (!is_invalid_reserved_pfn(pfn)) {
+			unpin_user_page_range_dirty_lock(
+					pfn_to_page(pfn), to_unpin, pages->writable);
+		}
+
 		iopt_pages_sub_npinned(pages, to_unpin);
 		cur++;
 		offset = 0;
@@ -429,12 +447,49 @@ struct pfn_reader {
 	unsigned long upages_end;
 };
 
+static int follow_fault_pfn(struct vm_area_struct *vma, struct mm_struct *mm,
+			    unsigned long vaddr, unsigned long *pfn,
+			    bool write_fault)
+{
+	pte_t *ptep;
+	spinlock_t *ptl;
+	int ret;
+
+	ret = follow_pte(vma->vm_mm, vaddr, &ptep, &ptl);
+	if (ret) {
+		bool unlocked = false;
+
+		ret = fixup_user_fault(mm, vaddr,
+				       FAULT_FLAG_REMOTE |
+				       (write_fault ?  FAULT_FLAG_WRITE : 0),
+				       &unlocked);
+		if (unlocked)
+			return -EAGAIN;
+
+		if (ret)
+			return ret;
+
+		ret = follow_pte(vma->vm_mm, vaddr, &ptep, &ptl);
+		if (ret)
+			return ret;
+	}
+
+	if (write_fault && !pte_write(*ptep))
+		ret = -EFAULT;
+	else
+		*pfn = pte_pfn(*ptep);
+
+	pte_unmap_unlock(ptep, ptl);
+	return ret;
+}
+
 static int pfn_reader_pin_pages(struct pfn_reader *pfns)
 {
 	struct iopt_pages *pages = pfns->pages;
 	unsigned int gup_flags;
-	unsigned long npages;
+	unsigned long npages, vaddr, pfn;
 	long rc;
+	struct vm_area_struct *vma;
 
 	if (pfns->pages->writable) {
 		gup_flags = FOLL_LONGTERM | FOLL_WRITE;
@@ -463,15 +518,37 @@ static int pfn_reader_pin_pages(struct pfn_reader *pfns)
 		       pfns->span.last_hole - pfns->fill_index + 1,
 		       pfns->upages_len / sizeof(*pfns->upages));
 
+	vaddr = (unsigned long )(pages->uptr + pfns->fill_index * PAGE_SIZE);
+
 	/* FIXME memlock */
 	rc = pin_user_pages_remote(
 		pages->source_mm,
-		(uintptr_t)(pages->uptr + pfns->fill_index * PAGE_SIZE), npages,
+		(uintptr_t)vaddr, npages,
 		gup_flags, pfns->upages, NULL, NULL);
-	if (rc < 0)
-		return rc;
-	if (WARN_ON(!rc))
-		return -EFAULT;
+	if (rc > 0) {
+		goto done;
+	}
+
+	vaddr = untagged_addr(vaddr);
+
+retry:
+	vma = vma_lookup(pages->source_mm, vaddr);
+
+	if (vma && vma->vm_flags & VM_PFNMAP) {
+		rc = follow_fault_pfn(vma, pages->source_mm, vaddr, &pfn, true); //pfns->pages->writable
+		if (rc == -EAGAIN)
+			goto retry;
+
+		if (!rc) {
+			if (is_invalid_reserved_pfn(pfn)) {
+				rc = 1;
+				*pfns->upages = pfn_to_page(pfn);
+			} else
+				return -EFAULT;
+		}
+	}
+
+done:
 	iopt_pages_add_npinned(pages, rc);
 	pfns->upages_start = pfns->fill_index;
 	pfns->upages_end = pfns->fill_index + rc;
