@@ -2218,6 +2218,9 @@ int vfio_pin_pages(struct vfio_device *device, unsigned long *user_pfn,
 	if (group->dev_counter > 1)
 		return -EINVAL;
 
+	/*
+	 * TODO: pin_pages should use the iommufd implementation in compat mode
+	 */
 	/* group->container cannot change while a vfio device is open */
 	container = group->container;
 	driver = container->iommu_driver;
@@ -2254,6 +2257,9 @@ int vfio_unpin_pages(struct vfio_device *device, unsigned long *user_pfn,
 	if (npage > VFIO_PIN_PAGES_MAX_ENTRIES)
 		return -E2BIG;
 
+	/*
+	 * TODO: unpin_pages should use the iommufd implementation in compat mode
+	 */
 	/* group->container cannot change while a vfio device is open */
 	container = device->group->container;
 	driver = container->iommu_driver;
@@ -2294,6 +2300,9 @@ int vfio_dma_rw(struct vfio_device *device, dma_addr_t user_iova, void *data,
 	if (!data || len <= 0 || !vfio_assert_device_open(device))
 		return -EINVAL;
 
+	/*
+	 * TODO: dma_rw should use the iommufd implementation in compat mode
+	 */
 	/* group->container cannot change while a vfio device is open */
 	container = device->group->container;
 	driver = container->iommu_driver;
@@ -2317,6 +2326,9 @@ static int vfio_register_iommu_notifier(struct vfio_group *group,
 
 	lockdep_assert_held_read(&group->group_rwsem);
 
+	/*
+	 * TODO: register_notifier should use the iommufd implementation in compat mode
+	 */
 	container = group->container;
 	driver = container->iommu_driver;
 	if (likely(driver && driver->ops->register_notifier))
@@ -2337,6 +2349,9 @@ static int vfio_unregister_iommu_notifier(struct vfio_group *group,
 
 	lockdep_assert_held_read(&group->group_rwsem);
 
+	/*
+	 * TODO: unregister_notifier should use the iommufd implementation in compat mode
+	 */
 	container = group->container;
 	driver = container->iommu_driver;
 	if (likely(driver && driver->ops->unregister_notifier))
