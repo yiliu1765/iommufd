@@ -1224,7 +1224,7 @@ static int vfio_group_add_container_user(struct vfio_group *group)
 		atomic_dec(&group->container_users);
 		return -EPERM;
 	}
-	if (!group->container->iommu_driver) {
+	if ((group->container && !group->container->iommu_driver) || !group->iommufd) {
 		atomic_dec(&group->container_users);
 		return -EINVAL;
 	}
