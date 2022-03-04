@@ -6,6 +6,8 @@
 #include <linux/iommu.h>
 #include <linux/file.h>
 #include <linux/pci.h>
+#include <linux/irqdomain.h>
+#include <linux/dma-iommu.h>
 
 #include "iommufd_private.h"
 
@@ -126,6 +128,66 @@ static bool iommufd_hw_pagetable_has_group(struct iommufd_hw_pagetable *hwpt,
 	return false;
 }
 
+static bool iommu_group_has_sw_msi(struct list_head *group_resv_regions,
+				   phys_addr_t *base)
+{
+	struct iommu_resv_region *region;
+	bool ret = false;
+
+	list_for_each_entry(region, group_resv_regions, list) {
+		/*
+		 * The presence of any 'real' MSI regions should take
+		 * precedence over the software-managed one if the
+		 * IOMMU driver happens to advertise both types.
+		 */
+		if (region->type == IOMMU_RESV_MSI) {
+			ret = false;
+			break;
+		}
+
+		if (region->type == IOMMU_RESV_SW_MSI) {
+			*base = region->start;
+			ret = true;
+		}
+	}
+
+	return ret;
+}
+
+static int iommufd_device_get_sw_msi(struct iommufd_device *idev,
+				     struct iommu_domain *domain)
+{
+	struct iommu_resv_region *resv;
+	struct iommu_resv_region *tmp;
+	LIST_HEAD(group_resv_regions);
+	phys_addr_t resv_msi_base = 0;
+	int rc;
+	bool msi_remap;
+
+	msi_remap = irq_domain_check_msi_remap() ||
+		    iommu_capable(idev->dev->bus, IOMMU_CAP_INTR_REMAP);
+
+	/* VFIO equivalent allow_unsafe_interrupts opt-in to be discussed */
+	if (!msi_remap)
+		return -EPERM;
+
+	rc = iommu_get_group_resv_regions(idev->group, &group_resv_regions);
+	if (rc)
+		return rc;
+
+	if (iommu_group_has_sw_msi(&group_resv_regions, &resv_msi_base)) {
+		rc = iommu_get_msi_cookie(domain, resv_msi_base);
+		if (rc == -ENODEV)
+			rc = 0;
+	}
+
+	list_for_each_entry_safe (resv, tmp, &group_resv_regions, list)
+		kfree(resv);
+
+	return rc;
+
+}
+
 /**
  * iommufd_device_attach - Connect a device to an iommu_domain
  * @idev: device to attach
@@ -159,6 +221,10 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
 		rc = iommu_attach_group(hwpt->domain, idev->group);
 		if (rc)
 			goto out_unlock;
+
+		rc = iommufd_device_get_sw_msi(idev, hwpt->domain);
+		if (rc)
+			goto out_detach;
 
 		/*
 		 * hwpt is now the exclusive owner of the group so this is the
