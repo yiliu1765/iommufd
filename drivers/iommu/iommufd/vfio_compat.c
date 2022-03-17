@@ -47,7 +47,9 @@ create_compat_ioas(struct iommufd_ctx *ictx)
 	xa_unlock(&ictx->objects);
 
 	if (out_ioas != ioas) {
+	printk("%s - 1\n", __func__);
 		iommufd_object_abort(ictx, &ioas->obj);
+	printk("%s - 2\n", __func__);
 		return out_ioas;
 	}
 	if (!iommufd_lock_obj(&ioas->obj))

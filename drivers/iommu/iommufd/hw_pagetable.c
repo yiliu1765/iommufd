@@ -84,7 +84,9 @@ iommufd_hw_pagetable_auto_get(struct iommufd_ctx *ictx,
 	return hwpt;
 
 out_abort:
+	printk("%s - 1\n", __func__);
 	iommufd_object_abort(ictx, &hwpt->obj);
+	printk("%s - 2\n", __func__);
 out_unlock:
 	mutex_unlock(&ioas->mutex);
 	return ERR_PTR(rc);

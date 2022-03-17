@@ -56,6 +56,7 @@ struct iommufd_object *_iommufd_object_alloc(struct iommufd_ctx *ictx,
 		      xa_limit_32b, GFP_KERNEL);
 	if (rc)
 		goto out_free;
+	printk("%s obj->id: %u, obj->type: %u\n", __func__, obj->id, obj->type);
 	return obj;
 out_free:
 	kfree(obj);
@@ -71,6 +72,7 @@ void iommufd_object_finalize(struct iommufd_ctx *ictx,
 {
 	void *old;
 
+	printk("%s obj->id: %u, obj->type: %u\n", __func__, obj->id, obj->type);
 	old = xa_store(&ictx->objects, obj->id, obj, GFP_KERNEL);
 	/* obj->id was returned from xa_alloc() so the xa_store() cannot fail */
 	WARN_ON(old);
@@ -81,6 +83,7 @@ void iommufd_object_abort(struct iommufd_ctx *ictx, struct iommufd_object *obj)
 {
 	void *old;
 
+	printk("%s obj->id: %u, type: %u\n", __func__, obj->id, obj->type);
 	old = xa_erase(&ictx->objects, obj->id);
 	WARN_ON(!old);
 	kfree(obj);

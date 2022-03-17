@@ -133,6 +133,7 @@ static int iommufd_device_setup_msi(struct iommufd_device *idev,
 				    phys_addr_t sw_msi_start,
 				    unsigned int flags)
 {
+	printk("%s, dev: %s, hwpt->domain: %llx\n", __func__, dev_name(idev->dev), (unsigned long long)hwpt->domain);
 	/*
 	 * IOMMU_CAP_INTR_REMAP means that the platform is isolating MSI,
 	 * nothing further to do.
@@ -140,6 +141,7 @@ static int iommufd_device_setup_msi(struct iommufd_device *idev,
 	if (iommu_capable(idev->dev->bus, IOMMU_CAP_INTR_REMAP))
 		return 0;
 
+	printk("%s %d\n", __func__, __LINE__);
 	/*
 	 * On ARM systems that set the global IRQ_DOMAIN_FLAG_MSI_REMAP every
 	 * allocated iommu_domain will block interrupts by default and this
@@ -208,6 +210,7 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id,
 		if (rc)
 			goto out_iova;
 		rc = iommufd_device_setup_msi(idev, hwpt, sw_msi_start, flags);
+		printk("%s rc: %d\n", __func__, rc);
 		if (rc)
 			goto out_detach;
 	}

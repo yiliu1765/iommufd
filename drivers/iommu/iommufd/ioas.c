@@ -38,7 +38,9 @@ struct iommufd_ioas *iommufd_ioas_alloc(struct iommufd_ctx *ictx)
 	return ioas;
 
 out_abort:
+	printk("%s - 1\n", __func__);
 	iommufd_object_abort(ictx, &ioas->obj);
+	printk("%s - 2\n", __func__);
 	return ERR_PTR(rc);
 }
 
