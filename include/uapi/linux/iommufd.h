@@ -43,6 +43,7 @@ enum {
 	IOMMUFD_CMD_IOAS_COPY,
 	IOMMUFD_CMD_IOAS_UNMAP,
 	IOMMUFD_CMD_VFIO_IOAS,
+	IOMMUFD_CMD_DEVICE_GET_INFO,
 };
 
 /**
@@ -220,4 +221,47 @@ struct iommu_vfio_ioas {
 	__u16 __reserved;
 };
 #define IOMMU_VFIO_IOAS _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VFIO_IOAS)
+
+/*
+ * struct iommu_vtd_data - Intel VT-d hardware data
+ *
+ * @flags: VT-d specific flags. Currently reserved for future
+ *	   extension. must be set to 0.
+ * @cap_reg: Describe basic capabilities as defined in VT-d capability
+ *	     register.
+ * @ecap_reg: Describe the extended capabilities as defined in VT-d
+ *	      extended capability register.
+ */
+struct iommu_vtd_data {
+	__u32 flags;
+	__u8 padding[32];
+	__aligned_u64 cap_reg;
+	__aligned_u64 ecap_reg;
+};
+
+/*
+ * struct iommu_device_info - ioctl(IOMMU_DEVICE_GET_INFO)
+ * @size: sizeof the whole info
+ * @flags: must be 0
+ * @dev_id: the device to query
+ * @iommu_hw_type: physical iommu type
+ * @reserved: must be 0
+ * @hw_data_ptr_len: length of hw data
+ * @hw_data_ptr: pointer to hw data area
+ */
+enum iommu_hw_type {
+	IOMMU_DRIVER_INTEL_V1,
+	IOMMU_DRIVER_ARM_V1,
+};
+
+struct iommu_device_info {
+	__u32 size;
+	__u32 flags;
+	__u32 dev_id;
+	__u32 iommu_hw_type;
+	__u32 reserved;
+	__u32 hw_data_ptr_len;
+	__aligned_u64 hw_data_ptr;
+};
+#define IOMMU_DEVICE_GET_INFO _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEVICE_GET_INFO)
 #endif

@@ -123,6 +123,12 @@ void iommufd_unbind_device(struct iommufd_device *idev)
 }
 EXPORT_SYMBOL_GPL(iommufd_unbind_device);
 
+int iommufd_device_get_info(struct iommufd_ucmd *ucmd)
+{
+	/* wait for iommu per-device info get API */
+	return -ENOTSUPP;
+}
+
 static bool iommufd_hw_pagetable_has_group(struct iommufd_hw_pagetable *hwpt,
 					   struct iommu_group *group)
 {
