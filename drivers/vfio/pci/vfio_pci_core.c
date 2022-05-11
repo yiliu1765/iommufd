@@ -662,7 +662,6 @@ int vfio_pci_core_bind_iommufd(struct vfio_device *core_vdev,
 
 	vdev->iommufd = bind->iommufd;
 	vdev->idev = idev;
-	vdev->hwpt_id = IOMMUFD_INVALID_ID;
 	bind->out_devid = id;
 
 out_unlock:
@@ -678,10 +677,16 @@ void vfio_pci_core_unbind_iommufd(struct vfio_device *core_vdev)
 
 	mutex_lock(&vdev->idev_lock);
 	if (vdev->idev) {
-		if (vdev->hwpt_id != IOMMUFD_INVALID_ID) {
-			vdev->iommufd = -1;
-			vdev->hwpt_id = IOMMUFD_INVALID_ID;
-			iommufd_device_detach(vdev->idev);
+		struct vfio_pci_hwpt *hwpt, *tmp;
+
+		vdev->iommufd = -1;
+		list_for_each_entry_safe(hwpt, tmp, &vdev->hwpts, next) {
+			list_del(&hwpt->next);
+			if (hwpt->pasid_present)
+				iommufd_device_detach_pasid(vdev->idev, hwpt->pasid);
+			else
+				iommufd_device_detach(vdev->idev);
+			kfree(hwpt);
 		}
 		iommufd_unbind_device(vdev->idev);
 		vdev->idev = NULL;
@@ -690,11 +695,25 @@ void vfio_pci_core_unbind_iommufd(struct vfio_device *core_vdev)
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_unbind_iommufd);
 
+static struct vfio_pci_hwpt *
+vfio_pci_find_hwpt(struct vfio_pci_core_device *vdev, u32 hwpt_id)
+{
+	struct vfio_pci_hwpt *hwpt;
+
+	list_for_each_entry(hwpt, &vdev->hwpts, next) {
+		if (hwpt->hwpt_id == hwpt_id) {
+			return hwpt;
+		}
+	}
+	return NULL;
+}
+
 int vfio_pci_core_attach_ioas(struct vfio_device *core_vdev,
 			      struct vfio_device_attach_ioas *attach)
 {
 	struct vfio_pci_core_device *vdev =
 		container_of(core_vdev, struct vfio_pci_core_device, vdev);
+	struct vfio_pci_hwpt *hwpt;
 	u32 pt_id = attach->ioas_id;
 	int ret;
 
@@ -705,8 +724,8 @@ int vfio_pci_core_attach_ioas(struct vfio_device *core_vdev,
 		goto out_unlock;
 	}
 
-	/* Currently only allows one IOAS attach */
-	if (vdev->hwpt_id != IOMMUFD_INVALID_ID) {
+	/* Only allows one attach without pasid */
+	if (!list_empty(&vdev->hwpts)) {
 		ret = -EBUSY;
 		goto out_unlock;
 	}
@@ -720,9 +739,33 @@ int vfio_pci_core_attach_ioas(struct vfio_device *core_vdev,
 	if (ret)
 		goto out_unlock;
 
-	vdev->hwpt_id = pt_id;
+	WARN_ON(attach->ioas_id == pt_id);
+
+	hwpt = vfio_pci_find_hwpt(vdev, pt_id);
+	if (!hwpt) {
+		hwpt = kzalloc(sizeof(*hwpt), GFP_KERNEL);
+		if (!hwpt) {
+			ret = -ENOMEM;
+			goto out_detach;
+		}
+		hwpt->hwpt_id = pt_id;
+		hwpt->count = 1;
+		hwpt->pasid_present = false;
+		list_add(&hwpt->next, &vdev->hwpts);
+	} else {
+		/* only one attach per hwpt to iommufd core, hence in
+		 * housekeeping, only needs to do one detach. */
+		iommufd_device_detach(vdev->idev);
+		hwpt->count++;
+	}
+
+	mutex_unlock(&vdev->idev_lock);
+
 	attach->out_hwpt_id = pt_id;
 
+	return 0;
+out_detach:
+	iommufd_device_detach(vdev->idev);
 out_unlock:
 	mutex_unlock(&vdev->idev_lock);
 
@@ -730,21 +773,92 @@ out_unlock:
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_attach_ioas);
 
+int vfio_pci_core_attach_hwpt(struct vfio_device *core_vdev,
+			      struct vfio_device_attach_hwpt *attach)
+{
+	struct vfio_pci_core_device *vdev =
+		container_of(core_vdev, struct vfio_pci_core_device, vdev);
+	struct vfio_pci_hwpt *hwpt;
+	u32 pt_id = attach->hwpt_id;
+	int ret;
+
+	mutex_lock(&vdev->idev_lock);
+
+	if (!vdev->idev || vdev->iommufd != attach->iommufd) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
+	/*
+	 * For user managed hwpt, requires device already been attached
+	 * to a parent ioas. Otherwise, need to fail the attempt of hwpt
+	 * attachment.
+	 */
+	if (!list_empty(&vdev->hwpts)) {
+		ret = -EOPNOTSUPP;
+		goto out_unlock;
+	}
+
+	ret = iommufd_device_attach_pasid(vdev->idev, &pt_id,
+					  attach->pasid, 0);
+	if (ret)
+		goto out_unlock;
+
+	hwpt = vfio_pci_find_hwpt(vdev, pt_id);
+	if (!hwpt) {
+		hwpt = kzalloc(sizeof(*hwpt), GFP_KERNEL);
+		if (!hwpt) {
+			ret = -ENOMEM;
+			goto out_detach;
+		}
+		hwpt->hwpt_id = pt_id;
+		hwpt->count = 1;
+		hwpt->pasid_present = true;
+		hwpt->pasid = attach->pasid;
+		list_add(&hwpt->next, &vdev->hwpts);
+	} else {
+		/* only one attach per hwpt to iommufd core, hence in
+		 * housekeeping, only needs to do one detach. */
+		iommufd_device_detach_pasid(vdev->idev, attach->pasid);
+		hwpt->count++;
+	}
+
+	mutex_unlock(&vdev->idev_lock);
+	return 0;
+out_detach:
+	iommufd_device_detach_pasid(vdev->idev, attach->pasid);
+out_unlock:
+	mutex_unlock(&vdev->idev_lock);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(vfio_pci_core_attach_hwpt);
+
 void vfio_pci_core_detach_hwpt(struct vfio_device *core_vdev,
 			       struct vfio_device_detach_hwpt *detach)
 {
 	struct vfio_pci_core_device *vdev =
 		container_of(core_vdev, struct vfio_pci_core_device, vdev);
+	struct vfio_pci_hwpt *hwpt;
 
 	mutex_lock(&vdev->idev_lock);
 
-	if (!vdev->idev ||
-	    vdev->iommufd != detach->iommufd ||
-	    vdev->hwpt_id != detach->hwpt_id)
+	if (!vdev->idev || vdev->iommufd != detach->iommufd)
 		goto out_unlock;
 
-	vdev->hwpt_id = IOMMUFD_INVALID_ID;
-	iommufd_device_detach(vdev->idev);
+	hwpt = vfio_pci_find_hwpt(vdev, detach->hwpt_id);
+	if (!hwpt)
+		goto out_unlock;
+
+	vdev->iommufd = -1;
+	if (!--hwpt->count) {
+		list_del(&hwpt->next);
+		if (hwpt->pasid_present)
+			iommufd_device_detach_pasid(vdev->idev, hwpt->pasid);
+		else
+			iommufd_device_detach(vdev->idev);
+		kfree(hwpt);
+	}
 
 out_unlock:
 	mutex_unlock(&vdev->idev_lock);
