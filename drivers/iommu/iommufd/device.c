@@ -9,6 +9,7 @@
 #include <linux/irqdomain.h>
 #include <linux/dma-iommu.h>
 #include <linux/dma-map-ops.h>
+#include <uapi/linux/iommufd.h>
 
 #include "iommufd_private.h"
 
@@ -133,6 +134,53 @@ bool iommufd_device_enforced_coherent(struct iommufd_device *idev)
 	return iommufd_ioas_enforced_coherent(idev->hwpt->ioas);
 }
 EXPORT_SYMBOL_GPL(iommufd_device_enforced_coherent);
+
+int iommufd_device_get_info(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_device_info *cmd = ucmd->cmd;
+	struct iommufd_object *obj;
+	struct iommufd_device *idev;
+	struct iommu_hw_info hw_info;
+	void *data = NULL;
+	int rc;
+
+	if (cmd->flags || cmd->__reserved)
+		return -EOPNOTSUPP;
+
+	obj = iommufd_get_object(ucmd->ictx, cmd->dev_id, IOMMUFD_OBJ_DEVICE);
+	if (IS_ERR(obj))
+		return PTR_ERR(obj);
+
+	idev = container_of(obj, struct iommufd_device, obj);
+
+	if (cmd->out_data_len) {
+		data = kzalloc(cmd->out_data_len, GFP_KERNEL);
+		hw_info.data_len = cmd->out_data_len;
+		hw_info.data = data;
+	}
+
+	rc = iommu_get_hw_info(idev->dev, &hw_info);
+	if (rc < 0)
+		goto out_free_data;
+
+	cmd->out_device_type = hw_info.device_type;
+
+	if (copy_to_user((void __user *)cmd->out_data_ptr,
+			 data, (unsigned long)cmd->out_data_len)) {
+		rc = -EFAULT;
+		goto out_free_data;
+	}
+
+	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+	if (rc)
+		goto out_put;
+
+out_free_data:
+	kfree(data);
+out_put:
+	iommufd_put_object(obj);
+	return rc;
+}
 
 static int iommufd_device_setup_msi(struct iommufd_device *idev,
 				    struct iommufd_hw_pagetable *hwpt,
