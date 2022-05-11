@@ -285,17 +285,22 @@ struct vfio_device_detach_hwpt {
  * Undo by VFIO_DEVICE_DETACH_HWPT.
  *
  * @argsz:	user filled size of this data.
- * @flags:	must be 0.
+ * @flags:	optional flags.
  * @iommufd:	iommufd where the hwpt comes from.
  * @hwpt_id:	Input the target hwpt.
+ * @user_pasid:	Input a user pasid if VFIO_DEVICE_ATTACH_USER_PASID is
+ *		configured. Kernel should install the hwpt to the pasid
+ *		behind the device.
  *
  * Return: 0 on success, -errno on failure.
  */
 struct vfio_device_attach_hwpt {
 	__u32	argsz;
 	__u32	flags;
+#define VFIO_DEVICE_ATTACH_USER_PASID	(1 << 0)
 	__s32	iommufd;
 	__u32	hwpt_id;
+	__u32	user_pasid;
 };
 
 #define VFIO_DEVICE_ATTACH_HWPT	_IO(VFIO_TYPE, VFIO_BASE + 22)

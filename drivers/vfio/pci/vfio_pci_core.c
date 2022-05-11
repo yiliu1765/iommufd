@@ -685,7 +685,7 @@ void vfio_pci_core_unbind_iommufd(struct vfio_device *core_vdev)
 			list_del(&hwpt->next);
 			if (hwpt->stage1)
 				iommufd_device_detach_pasid(vdev->idev,
-							    INVALID_IOASID);
+							    hwpt->pasid);
 			else
 				iommufd_device_detach(vdev->idev);
 			kfree(hwpt);
@@ -780,7 +780,8 @@ int vfio_pci_core_attach_hwpt(struct vfio_device *core_vdev,
 		container_of(core_vdev, struct vfio_pci_core_device, vdev);
 	struct vfio_pci_hwpt *hwpt;
 	u32 pt_id = attach->hwpt_id;
-	ioasid_t pasid = INVALID_IOASID;
+	ioasid_t pasid = attach->flags & VFIO_DEVICE_ATTACH_USER_PASID ?
+					attach->user_pasid : INVALID_IOASID;
 	int ret;
 
 	mutex_lock(&vdev->idev_lock);
@@ -819,6 +820,7 @@ int vfio_pci_core_attach_hwpt(struct vfio_device *core_vdev,
 
 	hwpt->hwpt_id = pt_id;
 	hwpt->stage1 = true;
+	hwpt->pasid = pasid;
 	list_add(&hwpt->next, &vdev->hwpts);
 
 	mutex_unlock(&vdev->idev_lock);
@@ -853,7 +855,7 @@ void vfio_pci_core_detach_hwpt(struct vfio_device *core_vdev,
 
 	list_del(&hwpt->next);
 	if (hwpt->stage1)
-		iommufd_device_detach_pasid(vdev->idev, INVALID_IOASID);
+		iommufd_device_detach_pasid(vdev->idev, hwpt->pasid);
 	else
 		iommufd_device_detach(vdev->idev);
 	kfree(hwpt);

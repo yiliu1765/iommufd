@@ -100,6 +100,7 @@ struct vfio_pci_hwpt {
 	/* Head at vfio_pci_core_device::hwpts */
 	struct list_head	next;
 	u32			hwpt_id;
+	ioasid_t		pasid;
 	bool			stage1;
 };
 
