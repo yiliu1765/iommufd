@@ -10,6 +10,7 @@
 #include <linux/errno.h>
 #include <linux/err.h>
 #include <linux/device.h>
+#include <linux/ioasid.h>
 
 #define IOMMUFD_INVALID_ID  0
 
@@ -28,6 +29,10 @@ enum {
 int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id,
 			  unsigned int flags);
 void iommufd_device_detach(struct iommufd_device *idev);
+
+int iommufd_device_attach_pasid(struct iommufd_device *idev, u32 *pt_id,
+				ioasid_t pasid, unsigned int flags);
+void iommufd_device_detach_pasid(struct iommufd_device *idev, ioasid_t pasid);
 
 struct iommufd_ctx *vfio_group_set_iommufd(int fd, struct list_head *device_list);
 void vfio_group_unset_iommufd(void *iommufd, struct list_head *device_list);
