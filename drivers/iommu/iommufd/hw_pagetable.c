@@ -3,6 +3,7 @@
  * Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES
  */
 #include <linux/iommu.h>
+#include <uapi/linux/iommufd.h>
 
 #include "iommufd_private.h"
 
@@ -10,15 +11,27 @@ void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 {
 	struct iommufd_hw_pagetable *hwpt =
 		container_of(obj, struct iommufd_hw_pagetable, obj);
-	struct iommufd_ioas *ioas = hwpt->ioas;
 
 	WARN_ON(!list_empty(&hwpt->devices));
-	mutex_lock(&ioas->mutex);
-	list_del(&hwpt->auto_domains_item);
-	mutex_unlock(&ioas->mutex);
+	if (hwpt->type == IOMMUFD_HWPT_KERNEL) {
+		struct iommufd_ioas *ioas = hwpt->kernel.ioas;
+
+		mutex_lock(&ioas->mutex);
+		list_del(&hwpt->kernel.auto_domains_item);
+		mutex_unlock(&ioas->mutex);
+		WARN_ON(!list_empty(&hwpt->kernel.stage1_domains));
+		mutex_destroy(&hwpt->kernel.mutex);
+		refcount_dec(&ioas->obj.users);
+	} else {
+		struct iommufd_hw_pagetable *parent = hwpt->user.parent;
+
+		mutex_lock(&parent->kernel.mutex);
+		list_del(&hwpt->user.stage1_domains_item);
+		mutex_unlock(&parent->kernel.mutex);
+		refcount_dec(&parent->obj.users);
+	}
 
 	iommu_domain_free(hwpt->domain);
-	refcount_dec(&hwpt->ioas->obj.users);
 	mutex_destroy(&hwpt->devices_lock);
 }
 
@@ -32,6 +45,7 @@ iommufd_hw_pagetable_auto_get(struct iommufd_ctx *ictx,
 			      struct iommufd_ioas *ioas, struct device *dev)
 {
 	struct iommufd_hw_pagetable *hwpt;
+	struct iommufd_hw_pagetable_kernel *kernel;
 	int rc;
 
 	/*
@@ -39,7 +53,8 @@ iommufd_hw_pagetable_auto_get(struct iommufd_ctx *ictx,
 	 * from the right ops is interchangeable with any other.
 	 */
 	mutex_lock(&ioas->mutex);
-	list_for_each_entry (hwpt, &ioas->auto_domains, auto_domains_item) {
+	list_for_each_entry (kernel, &ioas->auto_domains, auto_domains_item) {
+		hwpt = container_of(kernel, struct iommufd_hw_pagetable, kernel);
 		/*
 		 * FIXME: We really need an op from the driver to test if a
 		 * device is compatible with a domain. This thing from VFIO
@@ -67,11 +82,16 @@ iommufd_hw_pagetable_auto_get(struct iommufd_ctx *ictx,
 
 	INIT_LIST_HEAD(&hwpt->devices);
 	mutex_init(&hwpt->devices_lock);
-	hwpt->ioas = ioas;
+	hwpt->type = IOMMUFD_HWPT_KERNEL;
+	kernel = &hwpt->kernel;
+	kernel->ioas = ioas;
+	INIT_LIST_HEAD(&kernel->stage1_domains);
+	mutex_init(&kernel->mutex);
+
 	/* The calling driver is a user until iommufd_hw_pagetable_put() */
 	refcount_inc(&ioas->obj.users);
 
-	list_add_tail(&hwpt->auto_domains_item, &ioas->auto_domains);
+	list_add_tail(&kernel->auto_domains_item, &ioas->auto_domains);
 	/*
 	 * iommufd_object_finalize() consumes the refcount, get one for the
 	 * caller. This pairs with the first put in
@@ -112,9 +132,28 @@ iommufd_hw_pagetable_from_id(struct iommufd_ctx *ictx, u32 pt_id,
 		return ERR_CAST(obj);
 
 	switch (obj->type) {
-	case IOMMUFD_OBJ_HW_PAGETABLE:
+	case IOMMUFD_OBJ_HW_PAGETABLE: {
+		struct iommufd_hw_pagetable * hwpt;
+
+		hwpt = container_of(obj, struct iommufd_hw_pagetable, obj);
+		if (!hwpt->domain) {
+			hwpt->domain = iommu_domain_alloc(dev->bus);
+			if (!hwpt->domain) {
+				iommufd_put_object(obj);
+				return ERR_PTR(-ENOMEM);
+			}
+			if (hwpt->type == IOMMUFD_HWPT_USER_S1) {
+				/* TODO: Needs to pass the page table ptr, pgtbl config
+				 * and parent domain to iommu layer, iommu layer should
+				 * store the info and use the info to setup pasid entry
+				 * or pasid table in the CD table and enable nested translation
+				 * when calling with iommu_attach_device_pasid()
+				 * Wait for iommu API ready */
+			}
+		}
 		iommufd_put_object_keep_user(obj);
-		return container_of(obj, struct iommufd_hw_pagetable, obj);
+		return hwpt;
+	}
 	case IOMMUFD_OBJ_IOAS: {
 		struct iommufd_ioas *ioas =
 			container_of(obj, struct iommufd_ioas, obj);
@@ -133,10 +172,73 @@ iommufd_hw_pagetable_from_id(struct iommufd_ctx *ictx, u32 pt_id,
 void iommufd_hw_pagetable_put(struct iommufd_ctx *ictx,
 			      struct iommufd_hw_pagetable *hwpt)
 {
-	if (list_empty(&hwpt->auto_domains_item)) {
+	if (list_empty(&hwpt->kernel.auto_domains_item)) {
 		/* Manually created hw_pagetables just keep going */
 		refcount_dec(&hwpt->obj.users);
 		return;
 	}
 	iommufd_object_destroy_user(ictx, &hwpt->obj);
+}
+
+int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_hwpt_alloc *cmd = ucmd->cmd;
+	struct iommufd_object *parent_obj;
+	struct iommufd_hw_pagetable *hwpt;
+	struct iommufd_hw_pagetable *parent;
+	struct iommufd_hw_pagetable_user *user;
+	int rc;
+
+	if (cmd->flags)
+		return -EOPNOTSUPP;
+
+	parent_obj = iommufd_get_object(ucmd->ictx, cmd->parent_hwpt_id,
+					IOMMUFD_OBJ_HW_PAGETABLE);
+	if (IS_ERR(parent_obj))
+		return PTR_ERR(parent_obj);
+
+	parent = container_of(parent_obj, struct iommufd_hw_pagetable, obj);
+	if (parent->type != IOMMUFD_HWPT_KERNEL) {
+		rc = -EINVAL;
+		goto out_put;
+	}
+
+	hwpt = iommufd_object_alloc(ucmd->ictx, hwpt, IOMMUFD_OBJ_HW_PAGETABLE);
+	if (IS_ERR(hwpt)) {
+		rc = PTR_ERR(hwpt);
+		goto out_put;
+	}
+
+	INIT_LIST_HEAD(&hwpt->devices);
+	mutex_init(&hwpt->devices_lock);
+	hwpt->type = IOMMUFD_HWPT_USER_S1;
+	user = &hwpt->user;
+	user->parent = parent;
+	user->stage1_ptr = cmd->stage1_ptr;
+	user->config = cmd->config;
+
+	/*
+	 * iommufd_object_finalize() consumes the refcount, get one for the
+	 * caller. This pairs with the first put in
+	 * iommufd_object_destroy_user()
+	 */
+	refcount_inc(&hwpt->obj.users);
+
+	cmd->out_hwpt_id = hwpt->obj.id;
+	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+	if (rc)
+		goto out_abort;
+
+	mutex_lock(&parent->kernel.mutex);
+	list_add_tail(&user->stage1_domains_item, &parent->kernel.stage1_domains);
+	mutex_unlock(&parent->kernel.mutex);
+	iommufd_object_finalize(ucmd->ictx, &hwpt->obj);
+
+	return 0;
+
+out_abort:
+	iommufd_object_abort(ucmd->ictx, &hwpt->obj);
+out_put:
+	iommufd_put_object(parent_obj);
+	return rc;
 }

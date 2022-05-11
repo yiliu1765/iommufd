@@ -44,6 +44,7 @@ enum {
 	IOMMUFD_CMD_IOAS_UNMAP,
 	IOMMUFD_CMD_VFIO_IOAS,
 	IOMMUFD_CMD_DEVICE_GET_INFO,
+	IOMMUFD_CMD_HWPT_ALLOC,
 };
 
 /**
@@ -264,4 +265,64 @@ struct iommu_device_info {
 	__aligned_u64 hw_data_ptr;
 };
 #define IOMMU_DEVICE_GET_INFO _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEVICE_GET_INFO)
+
+/**
+ * struct iommu_stage1_config_vtd - Intel VT-d specific data on user managed pgtbl
+ *
+ * @flags:	VT-d PASID table entry attributes
+ * @pat:	Page attribute table data to compute effective memory type
+ * @emt:	Extended memory type
+ * @addr_width: the user managed page table input address width
+ *
+ * Only guest vIOMMU selectable and effective options are passed down to
+ * the host IOMMU.
+ */
+struct iommu_stage1_config_vtd {
+#define IOMMU_VTD_PGTBL_SRE	(1 << 0) /* supervisor request */
+#define IOMMU_VTD_PGTBL_EAFE	(1 << 1) /* extended access enable */
+#define IOMMU_VTD_PGTBL_PCD	(1 << 2) /* page-level cache disable */
+#define IOMMU_VTD_PGTBL_PWT	(1 << 3) /* page-level write through */
+#define IOMMU_VTD_PGTBL_EMTE	(1 << 4) /* extended mem type enable */
+#define IOMMU_VTD_PGTBL_CD	(1 << 5) /* PASID-level cache disable */
+#define IOMMU_VTD_PGTBL_WPE	(1 << 6) /* Write protect enable */
+#define IOMMU_VTD_PGTBL_LAST	(1 << 7)
+	__u64 flags;
+	__u32 pat;
+	__u32 emt;
+	__u32 addr_width;
+	__u32 __reserved;
+};
+
+#define IOMMU_VTD_PGTBL_MTS_MASK	(IOMMU_VTD_PGTBL_CD | \
+					 IOMMU_VTD_PGTBL_EMTE | \
+					 IOMMU_VTD_PGTBL_PCD |  \
+					 IOMMU_VTD_PGTBL_PWT)
+
+union iommu_stage1_config {
+	struct iommu_stage1_config_vtd vtd;
+};
+
+/**
+ * struct iommu_hwpt_alloc - ioctl(IOMMU_HWPT_ALLOC)
+ * @size: sizeof(struct iommu_hwpt_alloc)
+ * @flags: Must be 0
+ * @parent_hwpt_id: hwpt ID for the parent object
+ * @out_hwpt_id: Output hwpt ID for the allocated object
+ * @stage1_ptr: the stage1 (a.k.a user managed page table) pointer.
+		       This pointer should be subjected to stage2 translation.
+ * @config: vendor specific stage1 configurations
+ *
+ * Allocate a hardware page table which holds an I/O page table
+ */
+struct iommu_hwpt_alloc {
+	__u32 size;
+	__u32 flags;
+	__u32 parent_hwpt_id;
+	__u32 out_hwpt_id;
+	__aligned_u64 stage1_ptr;
+	/* Vendor specific data */
+	union iommu_stage1_config config;
+};
+#define IOMMU_HWPT_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_HWPT_ALLOC)
+
 #endif

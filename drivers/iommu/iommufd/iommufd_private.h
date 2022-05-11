@@ -8,6 +8,7 @@
 #include <linux/xarray.h>
 #include <linux/refcount.h>
 #include <linux/uaccess.h>
+#include <uapi/linux/iommufd.h>
 
 struct iommu_domain;
 struct iommu_group;
@@ -199,6 +200,29 @@ int iommufd_ioas_copy(struct iommufd_ucmd *ucmd);
 int iommufd_ioas_unmap(struct iommufd_ucmd *ucmd);
 int iommufd_vfio_ioas(struct iommufd_ucmd *ucmd);
 int iommufd_device_get_info(struct iommufd_ucmd *ucmd);
+int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd);
+
+struct iommufd_hw_pagetable_kernel {
+	struct iommufd_ioas *ioas;
+	bool msi_cookie;
+	/* Head at iommufd_ioas::auto_domains */
+	struct list_head auto_domains_item;
+	struct mutex mutex;
+	struct list_head stage1_domains;
+};
+
+struct iommufd_hw_pagetable_user {
+	struct iommufd_hw_pagetable *parent;
+	u64 stage1_ptr;
+	union iommu_stage1_config config;
+	/* Head at iommufd_hw_page_table::stage1_domains */
+	struct list_head stage1_domains_item;
+};
+
+enum iommufd_hw_pagetable_type {
+	IOMMUFD_HWPT_KERNEL = 0,
+	IOMMUFD_HWPT_USER_S1,
+};
 
 /*
  * A HW pagetable is called an iommu_domain inside the kernel. This user object
@@ -208,13 +232,14 @@ int iommufd_device_get_info(struct iommufd_ucmd *ucmd);
  */
 struct iommufd_hw_pagetable {
 	struct iommufd_object obj;
-	struct iommufd_ioas *ioas;
 	struct iommu_domain *domain;
-	bool msi_cookie;
-	/* Head at iommufd_ioas::auto_domains */
-	struct list_head auto_domains_item;
+	enum iommufd_hw_pagetable_type type;
 	struct mutex devices_lock;
 	struct list_head devices;
+	union {
+		struct iommufd_hw_pagetable_kernel kernel;
+		struct iommufd_hw_pagetable_user user;
+	};
 };
 
 struct iommufd_hw_pagetable *

@@ -166,12 +166,12 @@ static int iommufd_device_setup_msi(struct iommufd_device *idev,
 		 * iommu_get_msi_cookie() can only be called once per domain,
 		 * it returns -EBUSY on later calls.
 		 */
-		if (hwpt->msi_cookie)
+		if (hwpt->kernel.msi_cookie)
 			return 0;
 		rc = iommu_get_msi_cookie(hwpt->domain, sw_msi_start);
 		if (rc && rc != -ENODEV)
 			return rc;
-		hwpt->msi_cookie = true;
+		hwpt->kernel.msi_cookie = true;
 		return 0;
 	}
 
@@ -198,18 +198,18 @@ __iommufd_device_attach_kernel_hwpt(struct iommufd_device *idev,
 	 * first time enforce is called for this group.
 	 */
 	rc = iopt_table_enforce_group_resv_regions(
-		&hwpt->ioas->iopt, idev->group, &sw_msi_start);
+		&hwpt->kernel.ioas->iopt, idev->group, &sw_msi_start);
 	if (rc)
 		return rc;
 
 	rc = iommufd_device_setup_msi(idev, hwpt, sw_msi_start, flags);
 	if (rc)
-		iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->group);
+		iopt_remove_reserved_iova(&hwpt->kernel.ioas->iopt, idev->group);
 
 	if (list_empty(&hwpt->devices)) {
-		rc = iopt_table_add_domain(&hwpt->ioas->iopt, hwpt->domain);
+		rc = iopt_table_add_domain(&hwpt->kernel.ioas->iopt, hwpt->domain);
 		if (rc)
-			iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->group);
+			iopt_remove_reserved_iova(&hwpt->kernel.ioas->iopt, idev->group);
 	}
 
 	return rc;
@@ -219,9 +219,9 @@ static void
 __iommufd_device_detach_kernel_hwpt(struct iommufd_device *idev,
 				    struct iommufd_hw_pagetable *hwpt)
 {
-	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->group);
+	iopt_remove_reserved_iova(&hwpt->kernel.ioas->iopt, idev->group);
 	if (list_empty(&hwpt->devices))
-		iopt_table_remove_domain(&hwpt->ioas->iopt, hwpt->domain);
+		iopt_table_remove_domain(&hwpt->kernel.ioas->iopt, hwpt->domain);
 }
 
 /**
@@ -306,7 +306,8 @@ EXPORT_SYMBOL_GPL(iommufd_device_detach);
  * iommufd_device_attach_pasid - Connect a device+pasid to an iommu_domain
  * @idev: device to attach
  * @pasid: pasid to attach
- * @pt_id: Input an IOMMUFD_OBJ_HW_PAGETABLE
+ * @pt_id: Input a IOMMUFD_OBJ_IOAS, or IOMMUFD_OBJ_HW_PAGETABLE
+ *         Output the IOMMUFD_OBJ_HW_PAGETABLE ID
  * @flags: Optional flags
  *
  * This connects the device+pasid to an iommu_domain.
@@ -334,9 +335,11 @@ int iommufd_device_attach_pasid(struct iommufd_device *idev, u32 *pt_id,
 	if (rc)
 		goto out_unlock;
 
-	rc = __iommufd_device_attach_kernel_hwpt(idev, hwpt, flags);
-	if (rc)
-		goto out_detach;
+	if (hwpt->type == IOMMUFD_HWPT_KERNEL) {
+		rc = __iommufd_device_attach_kernel_hwpt(idev, hwpt, flags);
+		if (rc)
+			goto out_detach;
+	}
 
 	idev->hwpt = hwpt;
 	list_add(&idev->devices_item, &hwpt->devices);
@@ -363,7 +366,8 @@ void iommufd_device_detach_pasid(struct iommufd_device *idev, ioasid_t pasid)
 	mutex_lock(&hwpt->devices_lock);
 	list_del(&idev->devices_item);
 
-	__iommufd_device_detach_kernel_hwpt(idev, hwpt);
+	if (hwpt->type == IOMMUFD_HWPT_KERNEL)
+		__iommufd_device_detach_kernel_hwpt(idev, hwpt);
 
 	iommu_detach_device_pasid(hwpt->domain, idev->dev, pasid);
 	mutex_unlock(&hwpt->devices_lock);
