@@ -43,6 +43,7 @@ enum {
 	IOMMUFD_CMD_IOAS_COPY,
 	IOMMUFD_CMD_IOAS_UNMAP,
 	IOMMUFD_CMD_VFIO_IOAS,
+	IOMMUFD_CMD_DEVICE_GET_INFO,
 };
 
 /**
@@ -220,4 +221,47 @@ struct iommu_vfio_ioas {
 	__u16 __reserved;
 };
 #define IOMMU_VFIO_IOAS _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VFIO_IOAS)
+
+/*
+ * struct iommu_device_info_vtd - Intel VT-d specific nesting info.
+ *
+ * @flags: VT-d specific flags. Currently reserved for future
+ *	   extension. must be set to 0.
+ * @cap_reg: Describe basic capabilities as defined in VT-d capability
+ *	     register.
+ * @ecap_reg: Describe the extended capabilities as defined in VT-d
+ *	      extended capability register.
+ */
+struct iommu_device_info_vtd {
+	__u32 flags;
+	__u8 padding[32];
+	__aligned_u64 cap_reg;
+	__aligned_u64 ecap_reg;
+};
+
+/*
+ * struct iommu_device_info - ioctl(IOMMU_DEVICE_GET_INFO)
+ * @size: sizeof(struct iommu_device_info)
+ * @flags: Must be 0
+ * @format: PASID table entry format, the same definition as struct
+ *	    iommu_gpasid_bind_data @format.
+ * @addr_width:	the output addr width of first level/stage translation
+ * @pasid_bits:	maximum supported PASID bits, 0 represents no PASID
+ *		support.
+ * @vendor: vendor specific data, structure type can be deduced from
+ *	    @format field.
+ */
+struct iommu_device_info {
+	__u32 size;
+	__u32 flags;
+	__u32 format;
+	__u16 addr_width;
+	__u16 pasid_bits;
+	__u8 padding[64];
+	/* Vendor specific data */
+	union {
+		struct iommu_device_info_vtd vtd;
+	} vendor;
+};
+#define IOMMU_DEVICE_GET_INFO _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEVICE_GET_INFO)
 #endif
