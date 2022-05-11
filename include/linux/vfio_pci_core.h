@@ -230,6 +230,8 @@ int vfio_pci_core_bind_iommufd(struct vfio_device *core_vdev,
 void vfio_pci_core_unbind_iommufd(struct vfio_device *core_vdev);
 int vfio_pci_core_attach_ioas(struct vfio_device *core_vdev,
 			      struct vfio_device_attach_ioas *attach);
+int vfio_pci_core_attach_hwpt(struct vfio_device *core_vdev,
+			      struct vfio_device_attach_hwpt *attach);
 void vfio_pci_core_detach_hwpt(struct vfio_device *core_vdev,
 			       struct vfio_device_detach_hwpt *detach);
 void vfio_pci_core_close_device(struct vfio_device *core_vdev);

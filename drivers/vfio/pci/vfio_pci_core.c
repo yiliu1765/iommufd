@@ -756,6 +756,40 @@ out_unlock:
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_attach_ioas);
 
+int vfio_pci_core_attach_hwpt(struct vfio_device *core_vdev,
+			      struct vfio_device_attach_hwpt *attach)
+{
+	struct vfio_pci_core_device *vdev =
+		container_of(core_vdev, struct vfio_pci_core_device, vdev);
+	u32 pt_id = attach->hwpt_id;
+	int ret;
+
+	mutex_lock(&vdev->idev_lock);
+
+	if (!vdev->idev || vdev->iommufd != attach->iommufd) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
+	/* userspace needs to detach a hwpt before attaching a new */
+	if (vdev->hwpt_id != IOMMUFD_INVALID_ID) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+
+	ret = iommufd_device_attach(vdev->idev, &pt_id, 0);
+	if (ret) {
+		goto out_unlock;
+	}
+	vdev->hwpt_id = pt_id;
+
+out_unlock:
+	mutex_unlock(&vdev->idev_lock);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(vfio_pci_core_attach_hwpt);
+
 void vfio_pci_core_detach_hwpt(struct vfio_device *core_vdev,
 			       struct vfio_device_detach_hwpt *detach)
 {
