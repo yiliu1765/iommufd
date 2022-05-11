@@ -1497,6 +1497,35 @@ static long vfio_device_attach_ioas(struct vfio_device *device,
 			    sizeof(attach.out_hwpt_id)) ? -EFAULT : 0;
 }
 
+static long vfio_device_attach_hwpt(struct vfio_device *device,
+				    unsigned long arg)
+{
+	struct vfio_device_attach_hwpt attach;
+	unsigned long minsz;
+	long rc;
+
+	minsz = offsetofend(struct vfio_device_attach_hwpt, hwpt_id);
+	if (copy_from_user(&attach, (void __user *)arg, minsz))
+		return -EFAULT;
+
+	if (attach.argsz < minsz || attach.flags ||
+	    attach.iommufd < 0 || attach.hwpt_id == IOMMUFD_INVALID_ID)
+		return -EINVAL;
+
+	/* not allowed if the device is opened in legacy interface */
+	if (vfio_device_in_container(device))
+		return -EBUSY;
+
+	if (unlikely(!device->ops->attach_ioas))
+		return -EINVAL;
+
+	down_write(&device->group->group_rwsem);
+	rc = device->ops->attach_ioas(device, &attach.hwpt_id);
+	up_write(&device->group->group_rwsem);
+
+	return rc;
+}
+
 static long vfio_device_detach_hwpt(struct vfio_device *device,
 				    unsigned long arg)
 {
@@ -1546,6 +1575,8 @@ static long vfio_device_fops_unl_ioctl(struct file *filep,
 	switch (cmd) {
 	case VFIO_DEVICE_ATTACH_IOAS:
 		return vfio_device_attach_ioas(device, arg);
+	case VFIO_DEVICE_ATTACH_HWPT:
+		return vfio_device_attach_hwpt(device, arg);
 	case VFIO_DEVICE_DETACH_HWPT:
 		return vfio_device_detach_hwpt(device, arg);
 	case VFIO_DEVICE_FEATURE:
