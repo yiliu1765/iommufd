@@ -201,6 +201,7 @@ int iommufd_ioas_unmap(struct iommufd_ucmd *ucmd);
 int iommufd_vfio_ioas(struct iommufd_ucmd *ucmd);
 int iommufd_device_get_info(struct iommufd_ucmd *ucmd);
 int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd);
+int iommufd_hwpt_invalidate_cache(struct iommufd_ucmd *ucmd);
 
 struct iommufd_hw_pagetable_kernel {
 	struct iommufd_ioas *ioas;
