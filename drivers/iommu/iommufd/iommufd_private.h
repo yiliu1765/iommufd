@@ -9,6 +9,7 @@
 #include <linux/refcount.h>
 #include <linux/uaccess.h>
 #include <uapi/linux/iommufd.h>
+#include <linux/eventfd.h>
 
 struct iommu_domain;
 struct iommu_group;
@@ -216,6 +217,10 @@ struct iommufd_hw_pagetable_user {
 	struct iommufd_hw_pagetable *parent;
 	u64 stage1_ptr;
 	union iommu_stage1_config config;
+	struct mutex fault_queue_lock;
+	u8 *fault_pages;
+	struct mutex notify_gate;
+	struct eventfd_ctx *trigger;
 	/* Head at iommufd_hw_page_table::stage1_domains */
 	struct list_head stage1_domains_item;
 };
