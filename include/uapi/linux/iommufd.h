@@ -310,7 +310,9 @@ union iommu_pgtbl_config {
  * @parent_hwpt_id: hwpt ID for the parent object
  * @out_hwpt_id: Output hwpt ID for the allocated object
  * @pgtbl_ptr: the user managed page table pointer
- * @vendor: vendor specific configurations
+ * @eventfd: user provided eventfd for kernel to notify qemu for dma fault
+ * @out_fault_fd: user can access dma fault date via this fd once be signaled
+ * @config: vendor specific configurations
  *
  * Allocate a hardware page table which holds an I/O page table
  */
@@ -319,11 +321,33 @@ struct iommu_hwpt_alloc {
 	__u32 flags;
 	__u32 parent_hwpt_id;
 	__u32 out_hwpt_id;
+	__s32 eventfd;
+	__s32 out_fault_fd;
 	__aligned_u64 pgtbl_ptr;
 	/* Vendor specific data */
 	union iommu_pgtbl_config config;
 };
 #define IOMMU_HWPT_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_HWPT_ALLOC)
+
+/*
+ * DMA Fault Region Layout
+ * @tail: index relative to the start of the ring buffer at which the
+ *        consumer finds the next item in the buffer
+ * @entry_size: fault ring buffer entry size in bytes
+ * @nb_entries: max capacity of the fault ring buffer
+ * @offset: ring buffer offset relative to the start of the region
+ * @head: index relative to the start of the ring buffer at which the
+ *        producer (kernel) inserts items into the buffers
+ */
+struct iommufd_hwpt_dma_fault {
+	/* Write-Only */
+	__u32   tail;
+	/* Read-Only */
+	__u32   entry_size;
+	__u32	nb_entries;
+	__u32	offset;
+	__u32   head;
+};
 
 /* defines the granularity of the invalidation */
 enum iommu_inv_granularity {
