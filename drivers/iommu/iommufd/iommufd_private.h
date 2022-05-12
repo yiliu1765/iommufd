@@ -8,6 +8,9 @@
 #include <linux/xarray.h>
 #include <linux/refcount.h>
 #include <linux/uaccess.h>
+#include <uapi/linux/iommufd.h>
+#include <linux/iommufd.h>
+#include <linux/eventfd.h>
 
 struct iommu_domain;
 struct iommu_group;
@@ -214,6 +217,37 @@ int iommufd_ioas_copy(struct iommufd_ucmd *ucmd);
 int iommufd_ioas_unmap(struct iommufd_ucmd *ucmd);
 int iommufd_vfio_ioas(struct iommufd_ucmd *ucmd);
 int iommufd_device_get_info(struct iommufd_ucmd *ucmd);
+int iommufd_alloc_user_hwpt(struct iommufd_ucmd *ucmd);
+
+enum iommufd_hw_pagetable_type {
+	IOMMUFD_HWPT_IOAS_AUTO = 0,
+	IOMMUFD_HWPT_IOAS_USER = 1,
+	IOMMUFD_HWPT_USER_S1 = 2,
+};
+
+struct iommufd_hw_pagetable_ioas {
+	struct iommufd_ioas *ioas;
+	bool msi_cookie;
+	/* Head at iommufd_ioas::auto_domains */
+	struct list_head auto_domains_item;
+	struct mutex mutex;
+	struct list_head stage1_domains;
+};
+
+struct iommufd_hw_pagetable_s1 {
+	struct iommufd_hw_pagetable *stage2;
+	u64 stage1_ptr;
+	union iommu_stage1_config config;
+	struct file *fault_file;
+	int fault_fd;
+	struct mutex fault_queue_lock;
+	u8 *fault_pages;
+	size_t fault_region_size;
+	struct mutex notify_gate;
+	struct eventfd_ctx *trigger;
+	/* Head at iommufd_hw_page_table::stage1_domains */
+	struct list_head stage1_domains_item;
+};
 
 /*
  * A HW pagetable is called an iommu_domain inside the kernel. This user object
@@ -223,13 +257,38 @@ int iommufd_device_get_info(struct iommufd_ucmd *ucmd);
  */
 struct iommufd_hw_pagetable {
 	struct iommufd_object obj;
-	struct iommufd_ioas *ioas;
 	struct iommu_domain *domain;
-	bool msi_cookie;
-	/* Head at iommufd_ioas::auto_domains */
-	struct list_head auto_domains_item;
 	struct mutex devices_lock;
 	struct xarray devices;
+	enum iommufd_hw_pagetable_type type;
+	union {
+		struct iommufd_hw_pagetable_ioas ioas_hwpt;
+		struct iommufd_hw_pagetable_s1 s1_hwpt;
+	};
+};
+
+struct iommufd_hwpt_device {
+	unsigned int hwpt_xa_id;
+	ioasid_t pasid;
+	struct iommufd_device *idev;
+	struct iommufd_hw_pagetable *hwpt;
+	bool no_domain_attached;
+};
+
+/*
+ * A iommufd_device object represents the binding relationship between a
+ * consuming driver and the iommufd. These objects are created/destroyed by
+ * external drivers, not by userspace.
+ */
+struct iommufd_device {
+	struct iommufd_object obj;
+	struct iommufd_ctx *ictx;
+	struct mutex pasid_lock;
+	struct xarray pasid_xa;
+	/* always the physical device */
+	struct device *dev;
+	struct iommu_group *group;
+	bool dma_owner_claimed;
 };
 
 struct iommufd_hw_pagetable *
@@ -237,6 +296,9 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 			   struct device *dev);
 void iommufd_hw_pagetable_destroy(struct iommufd_object *obj);
 
+unsigned int
+iommufd_hw_pagetable_get_dev_id(struct iommufd_hw_pagetable *hwpt,
+				struct device *dev, ioasid_t pasid);
 void iommufd_device_destroy(struct iommufd_object *obj);
 
 #ifdef CONFIG_IOMMUFD_TEST

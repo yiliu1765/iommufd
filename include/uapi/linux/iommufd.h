@@ -648,14 +648,14 @@ struct iommu_fault_page_request {
 /**
  * struct iommu_fault - Generic fault data
  * @type: fault type from &enum iommu_fault_type
- * @padding: reserved for future use (should be zero)
+ * @dev_id: the dev_id previously returned to userspace per iommufd binding
  * @event: fault event, when @type is %IOMMU_FAULT_DMA_UNRECOV
  * @prm: Page Request message, when @type is %IOMMU_FAULT_PAGE_REQ
  * @padding2: sets the fault size to allow for future extensions
  */
 struct iommu_fault {
 	__u32	type;
-	__u32	padding;
+	__u32	dev_id;
 	union {
 		struct iommu_fault_unrecoverable event;
 		struct iommu_fault_page_request prm;
@@ -699,6 +699,7 @@ struct iommu_page_response {
 	__u32	pasid;
 	__u32	grpid;
 	__u32	code;
+	__u32	dev_id;
 };
 
 /**

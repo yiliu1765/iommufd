@@ -12,29 +12,6 @@
 
 #include "iommufd_private.h"
 
-struct iommufd_hwpt_device {
-	unsigned int hwpt_xa_id;
-	ioasid_t pasid;
-	struct iommufd_device *idev;
-	struct iommufd_hw_pagetable *hwpt;
-};
-
-/*
- * A iommufd_device object represents the binding relationship between a
- * consuming driver and the iommufd. These objects are created/destroyed by
- * external drivers, not by userspace.
- */
-struct iommufd_device {
-	struct iommufd_object obj;
-	struct iommufd_ctx *ictx;
-	struct mutex pasid_lock;
-	struct xarray pasid_xa;
-	/* always the physical device */
-	struct device *dev;
-	struct iommu_group *group;
-	bool dma_owner_claimed;
-};
-
 struct iommufd_device_attach_data {
 	unsigned int flags;
 	ioasid_t pasid;
@@ -199,6 +176,7 @@ static int iommufd_device_setup_msi(struct iommufd_device *idev,
 				    phys_addr_t sw_msi_start,
 				    unsigned int flags)
 {
+	struct iommufd_hw_pagetable_ioas *ioas_hwpt = &hwpt->ioas_hwpt;
 	int rc;
 
 	/*
@@ -220,12 +198,12 @@ static int iommufd_device_setup_msi(struct iommufd_device *idev,
 		 * iommu_get_msi_cookie() can only be called once per domain,
 		 * it returns -EBUSY on later calls.
 		 */
-		if (hwpt->msi_cookie)
+		if (ioas_hwpt->msi_cookie)
 			return 0;
 		rc = iommu_get_msi_cookie(hwpt->domain, sw_msi_start);
 		if (rc && rc != -ENODEV)
 			return rc;
-		hwpt->msi_cookie = true;
+		ioas_hwpt->msi_cookie = true;
 		return 0;
 	}
 
@@ -237,6 +215,24 @@ static int iommufd_device_setup_msi(struct iommufd_device *idev,
 	if (!(flags & IOMMUFD_ATTACH_FLAGS_ALLOW_UNSAFE_INTERRUPT))
 		return -EPERM;
 	return 0;
+}
+
+unsigned int
+iommufd_hw_pagetable_get_dev_id(struct iommufd_hw_pagetable *hwpt,
+				struct device *dev, ioasid_t pasid)
+{
+	struct iommufd_hwpt_device *hdev = NULL;
+	unsigned long index;
+
+	mutex_lock(&hwpt->devices_lock);
+	xa_for_each (&hwpt->devices, index, hdev)
+		if (hdev->idev->dev == dev && hdev->pasid == pasid) {
+			mutex_unlock(&hwpt->devices_lock);
+			return hdev->idev->obj.id;
+		}
+	mutex_unlock(&hwpt->devices_lock);
+
+	return IOMMUFD_INVALID_ID;
 }
 
 static bool iommufd_hw_pagetable_has_group(struct iommufd_hw_pagetable *hwpt,
@@ -251,7 +247,7 @@ static bool iommufd_hw_pagetable_has_group(struct iommufd_hw_pagetable *hwpt,
 	return false;
 }
 
-static int device_attach_auto_hwpt(struct iommufd_device *idev,
+static int device_attach_ioas_hwpt(struct iommufd_device *idev,
 				   struct iommufd_hw_pagetable *hwpt,
 				   unsigned int flags)
 {
@@ -263,36 +259,39 @@ static int device_attach_auto_hwpt(struct iommufd_device *idev,
 	 * first time enforce is called for this group.
 	 */
 	rc = iopt_table_enforce_group_resv_regions(
-		&hwpt->ioas->iopt, idev->group, &sw_msi_start);
+		&hwpt->ioas_hwpt.ioas->iopt, idev->group, &sw_msi_start);
 	if (rc)
 		return rc;
 	rc = iommufd_device_setup_msi(idev, hwpt, sw_msi_start, flags);
 	if (rc)
 		goto out_iova;
-	if (xa_empty(&hwpt->devices)) {
-		rc = iopt_table_add_domain(&hwpt->ioas->iopt, hwpt->domain);
+	if ((hwpt->type == IOMMUFD_HWPT_IOAS_AUTO) && xa_empty(&hwpt->devices)) {
+		rc = iopt_table_add_domain(&hwpt->ioas_hwpt.ioas->iopt, hwpt->domain);
 		if (rc)
 		goto out_iova;
 	}
 	return 0;
 out_iova:
-	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->group);
+	iopt_remove_reserved_iova(&hwpt->ioas_hwpt.ioas->iopt, idev->group);
 	return rc;
 }
 
-static void device_detach_auto_hwpt(struct iommufd_device *idev,
+static void device_detach_ioas_hwpt(struct iommufd_device *idev,
 				    struct iommufd_hw_pagetable *hwpt,
 				    bool *destroy_auto_domain)
 {
-	if (xa_empty(&hwpt->devices)) {
-		iopt_table_remove_domain(&hwpt->ioas->iopt,
+	struct iommufd_hw_pagetable_ioas *ioas_hwpt = &hwpt->ioas_hwpt;
+
+	if ((hwpt->type == IOMMUFD_HWPT_IOAS_AUTO) && xa_empty(&hwpt->devices)) {
+		iopt_table_remove_domain(&ioas_hwpt->ioas->iopt,
 					 hwpt->domain);
-		if (!list_empty(&hwpt->auto_domains_item)) {
-			list_del_init(&hwpt->auto_domains_item);
-			*destroy_auto_domain = true;
+		if (!list_empty(&ioas_hwpt->auto_domains_item)) {
+			list_del_init(&ioas_hwpt->auto_domains_item);
+			if (destroy_auto_domain)
+				*destroy_auto_domain = true;
 		}
 	}
-	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->group);
+	iopt_remove_reserved_iova(&ioas_hwpt->ioas->iopt, idev->group);
 }
 
 static int iommufd_device_attach_domain(struct iommufd_device *idev,
@@ -338,9 +337,13 @@ static int iommufd_device_attach_hwpt(struct iommufd_device *idev,
 	if (rc)
 		return rc;
 
-	rc = device_attach_auto_hwpt(idev, hwpt, flags);
-	if (rc)
-		iommufd_device_detach_domain(idev, hwpt->domain, attach->pasid);
+	if (hwpt->type == IOMMUFD_HWPT_IOAS_AUTO ||
+	    hwpt->type == IOMMUFD_HWPT_IOAS_USER) {
+		rc = device_attach_ioas_hwpt(idev, hwpt, flags);
+		if (rc)
+			iommufd_device_detach_domain(idev, hwpt->domain,
+						     attach->pasid);
+	}
 
 	return rc;
 }
@@ -355,7 +358,9 @@ static void iommufd_device_detach_hwpt(struct iommufd_hwpt_device *hdev,
 	if (iommufd_hw_pagetable_has_group(hdev->hwpt, idev->group))
 		return;
 
-	device_detach_auto_hwpt(idev, hwpt, destroy_auto_domain);
+	if (hwpt->type == IOMMUFD_HWPT_IOAS_AUTO ||
+	    hwpt->type == IOMMUFD_HWPT_IOAS_USER)
+		device_detach_ioas_hwpt(idev, hwpt, destroy_auto_domain);
 
 	iommufd_device_detach_domain(idev, hwpt->domain, pasid);
 }
@@ -407,7 +412,8 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 	}
 	refcount_inc(&hwpt->obj.users);
 	mutex_unlock(&hwpt->devices_lock);
-	*out_hdev = hdev;
+	if (out_hdev)
+		*out_hdev = hdev;
 	return 0;
 out_release_hwpt_xa_id:
 	xa_erase(&idev->pasid_xa, attach->pasid);
@@ -430,6 +436,7 @@ static int iommufd_device_auto_get_domain(struct iommufd_device *idev,
 					  struct iommufd_device_attach_data *attach,
 					  struct iommufd_hwpt_device **out_hdev)
 {
+	struct iommufd_hw_pagetable_ioas *ioas_hwpt;
 	struct iommufd_hw_pagetable *hwpt;
 	int rc;
 
@@ -439,7 +446,8 @@ static int iommufd_device_auto_get_domain(struct iommufd_device *idev,
 	 * other.
 	 */
 	mutex_lock(&ioas->mutex);
-	list_for_each_entry (hwpt, &ioas->auto_domains, auto_domains_item) {
+	list_for_each_entry (ioas_hwpt, &ioas->auto_domains, auto_domains_item) {
+		hwpt = container_of(ioas_hwpt, struct iommufd_hw_pagetable, ioas_hwpt);
 		if (!refcount_inc_not_zero(&hwpt->obj.users))
 			continue;
 
@@ -465,7 +473,8 @@ static int iommufd_device_auto_get_domain(struct iommufd_device *idev,
 	if (rc)
 		goto out_abort;
 
-	list_add_tail(&hwpt->auto_domains_item, &ioas->auto_domains);
+	list_add_tail(&hwpt->ioas_hwpt.auto_domains_item, &ioas->auto_domains);
+
 	mutex_unlock(&ioas->mutex);
 	iommufd_object_finalize(idev->ictx, &hwpt->obj);
 	return 0;
@@ -474,6 +483,32 @@ out_abort:
 	iommufd_object_abort_and_destroy(idev->ictx, &hwpt->obj);
 out_unlock:
 	mutex_unlock(&ioas->mutex);
+	return rc;
+}
+
+static int iommufd_device_hw_pagetable_attach(struct iommufd_device *idev,
+					      struct iommufd_hw_pagetable *hwpt,
+					      struct iommufd_device_attach_data *attach)
+{
+	int rc;
+
+	switch (hwpt->type) {
+	case IOMMUFD_HWPT_IOAS_AUTO:
+	case IOMMUFD_HWPT_IOAS_USER:
+		rc = iommufd_device_do_attach(idev, hwpt, attach, NULL);
+		break;
+	case IOMMUFD_HWPT_USER_S1:
+		rc = device_attach_ioas_hwpt(idev, hwpt->s1_hwpt.stage2, attach->flags);
+		if (rc)
+			break;
+		rc = iommufd_device_do_attach(idev, hwpt, attach, NULL);
+		if (rc)
+			device_detach_ioas_hwpt(idev, hwpt->s1_hwpt.stage2, NULL);
+		break;
+	default:
+		rc = -EINVAL;
+		break;
+	}
 	return rc;
 }
 
@@ -494,7 +529,7 @@ static int __iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id,
 		struct iommufd_hw_pagetable *hwpt =
 			container_of(pt_obj, struct iommufd_hw_pagetable, obj);
 
-		rc = iommufd_device_do_attach(idev, hwpt, attach, &hdev);
+		rc = iommufd_device_hw_pagetable_attach(idev, hwpt, attach);
 		if (rc)
 			goto out_unlock;
 		break;
@@ -506,6 +541,7 @@ static int __iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id,
 		rc = iommufd_device_auto_get_domain(idev, ioas, attach, &hdev);
 		if (rc)
 			goto out_unlock;
+		*pt_id = hdev->hwpt->obj.id;
 		break;
 	}
 	default:
@@ -514,7 +550,6 @@ static int __iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id,
 	}
 
 	refcount_inc(&idev->obj.users);
-	*pt_id = hdev->hwpt->obj.id;
 	rc = 0;
 
 out_unlock:
@@ -553,12 +588,53 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id,
 }
 EXPORT_SYMBOL_GPL(iommufd_device_attach);
 
+static void iommufd_ioas_hwpt_detach(struct iommufd_hwpt_device *hdev)
+{
+	struct iommufd_hw_pagetable *hwpt = hdev->hwpt;
+	struct iommufd_device *idev = hdev->idev;
+	bool destroy_auto_domain = false;
+
+	mutex_lock(&hwpt->ioas_hwpt.ioas->mutex);
+	mutex_lock(&hwpt->devices_lock);
+	xa_erase(&idev->pasid_xa, hdev->pasid);
+	xa_erase(&hdev->hwpt->devices, hdev->hwpt_xa_id);
+	iommufd_device_detach_hwpt(hdev, hdev->pasid, &destroy_auto_domain);
+	kfree(hdev);
+	mutex_unlock(&hwpt->devices_lock);
+	mutex_unlock(&hwpt->ioas_hwpt.ioas->mutex);
+
+	if (destroy_auto_domain)
+		iommufd_object_destroy_user(idev->ictx, &hwpt->obj);
+	else
+		refcount_dec(&hwpt->obj.users);
+
+	refcount_dec(&idev->obj.users);
+}
+
+static void iommufd_s1_hwpt_detach(struct iommufd_hwpt_device *hdev)
+{
+	struct iommufd_hw_pagetable *hwpt = hdev->hwpt;
+	struct iommufd_device *idev = hdev->idev;
+
+	mutex_lock(&hwpt->devices_lock);
+	xa_erase(&idev->pasid_xa, hdev->pasid);
+	xa_erase(&hdev->hwpt->devices, hdev->hwpt_xa_id);
+	iommufd_device_detach_hwpt(hdev, hdev->pasid, NULL);
+	kfree(hdev);
+	mutex_unlock(&hwpt->devices_lock);
+
+	device_detach_ioas_hwpt(idev, hwpt->s1_hwpt.stage2, NULL);
+
+	refcount_dec(&hwpt->obj.users);
+
+	refcount_dec(&idev->obj.users);
+}
+
 static void
 __iommufd_device_pasid_detach(struct iommufd_device *idev, ioasid_t pasid)
 {
-	struct iommufd_hw_pagetable *hwpt;
 	struct iommufd_hwpt_device *hdev;
-	bool destroy_auto_domain = false;
+	struct iommufd_hw_pagetable *hwpt;
 
 	mutex_lock(&idev->pasid_lock);
 	hdev = xa_load(&idev->pasid_xa, pasid);
@@ -567,21 +643,18 @@ __iommufd_device_pasid_detach(struct iommufd_device *idev, ioasid_t pasid)
 		return;
 	}
 	hwpt = hdev->hwpt;
-	mutex_lock(&hwpt->ioas->mutex);
-	mutex_lock(&hwpt->devices_lock);
-	xa_erase(&hwpt->devices, hdev->hwpt_xa_id);
-	iommufd_device_detach_hwpt(hdev, pasid, &destroy_auto_domain);
-	kfree(hdev);
-	mutex_unlock(&hwpt->devices_lock);
-	mutex_unlock(&hwpt->ioas->mutex);
+	switch (hwpt->type) {
+	case IOMMUFD_HWPT_IOAS_AUTO:
+	case IOMMUFD_HWPT_IOAS_USER:
+		iommufd_ioas_hwpt_detach(hdev);
+		break;
+	case IOMMUFD_HWPT_USER_S1:
+		iommufd_s1_hwpt_detach(hdev);
+		break;
+	default:
+		break;
+	}
 	mutex_unlock(&idev->pasid_lock);
-
-	if (destroy_auto_domain)
-		iommufd_object_destroy_user(idev->ictx, &hwpt->obj);
-	else
-		refcount_dec(&hwpt->obj.users);
-
-	refcount_dec(&idev->obj.users);
 }
 
 void iommufd_device_detach(struct iommufd_device *idev)
@@ -610,7 +683,8 @@ EXPORT_SYMBOL_GPL(iommufd_device_detach);
 int iommufd_device_pasid_attach(struct iommufd_device *idev, u32 *pt_id,
 				ioasid_t pasid, unsigned int flags)
 {
-	struct iommufd_device_attach_data attach = { .flags = flags, .pasid = pasid };
+	struct iommufd_device_attach_data attach = { .flags = flags,
+						     .pasid = pasid };
 
 	return __iommufd_device_attach(idev, pt_id, &attach);
 }
@@ -639,7 +713,7 @@ iommufd_device_selftest_attach(struct iommufd_ctx *ictx,
 	if (IS_ERR(hwpt))
 		return hwpt;
 
-	rc = iopt_table_add_domain(&hwpt->ioas->iopt, hwpt->domain);
+	rc = iopt_table_add_domain(&hwpt->ioas_hwpt.ioas->iopt, hwpt->domain);
 	if (rc)
 		goto out_hwpt;
 
@@ -655,7 +729,7 @@ out_hwpt:
 void iommufd_device_selftest_detach(struct iommufd_ctx *ictx,
 				    struct iommufd_hw_pagetable *hwpt)
 {
-	iopt_table_remove_domain(&hwpt->ioas->iopt, hwpt->domain);
+	iopt_table_remove_domain(&hwpt->ioas_hwpt.ioas->iopt, hwpt->domain);
 	refcount_dec(&hwpt->obj.users);
 }
 #endif
