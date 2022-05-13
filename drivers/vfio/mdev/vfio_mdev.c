@@ -102,10 +102,63 @@ static void vfio_mdev_request(struct vfio_device *core_vdev, unsigned int count)
 			   "No mdev vendor driver request callback support, blocked until released by user\n");
 }
 
+static int vfio_mdev_bind_iommufd(struct vfio_device *core_vdev,
+				  struct vfio_device_bind_iommufd *bind)
+{
+	struct mdev_device *mdev = to_mdev_device(core_vdev->dev);
+	struct mdev_parent *parent = mdev->type->parent;
+
+	if (unlikely(!parent->ops->bind_iommufd ||
+			!parent->ops->unbind_iommufd))
+		return -EOPNOTSUPP;
+
+	return parent->ops->bind_iommufd(mdev, bind);
+}
+
+static void vfio_mdev_unbind_iommufd(struct vfio_device *core_vdev)
+{
+	struct mdev_device *mdev = to_mdev_device(core_vdev->dev);
+	struct mdev_parent *parent = mdev->type->parent;
+
+	if (unlikely(!parent->ops->unbind_iommufd))
+		return;
+
+	parent->ops->unbind_iommufd(mdev);
+}
+
+static int vfio_mdev_attach_ioas(struct vfio_device *core_vdev,
+				 struct vfio_device_attach_ioas *attach)
+{
+	struct mdev_device *mdev = to_mdev_device(core_vdev->dev);
+	struct mdev_parent *parent = mdev->type->parent;
+
+	if (unlikely(!parent->ops->attach_ioas ||
+			!parent->ops->detach_hwpt))
+		return -EOPNOTSUPP;
+
+	return parent->ops->attach_ioas(mdev, attach);
+}
+
+static void vfio_mdev_detach_hwpt(struct vfio_device *core_vdev,
+				  struct vfio_device_detach_hwpt *detach)
+{
+	struct mdev_device *mdev = to_mdev_device(core_vdev->dev);
+	struct mdev_parent *parent = mdev->type->parent;
+
+	if (unlikely(!parent->ops->detach_hwpt))
+		return;
+
+	parent->ops->detach_hwpt(mdev, detach);
+}
+
 static const struct vfio_device_ops vfio_mdev_dev_ops = {
 	.name		= "vfio-mdev",
+	.bind_iommufd	= vfio_mdev_bind_iommufd,
+	.unbind_iommufd	= vfio_mdev_unbind_iommufd,
 	.open_device	= vfio_mdev_open_device,
 	.close_device	= vfio_mdev_close_device,
+	.attach_ioas	= vfio_mdev_attach_ioas,
+	.detach_hwpt	= vfio_mdev_detach_hwpt,
 	.ioctl		= vfio_mdev_unlocked_ioctl,
 	.read		= vfio_mdev_read,
 	.write		= vfio_mdev_write,

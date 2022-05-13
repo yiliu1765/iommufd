@@ -9,6 +9,7 @@
 
 #ifndef MDEV_H
 #define MDEV_H
+#include <linux/vfio.h>
 
 struct mdev_type;
 
@@ -90,6 +91,13 @@ struct mdev_parent_ops {
 	int     (*remove)(struct mdev_device *mdev);
 	int     (*open_device)(struct mdev_device *mdev);
 	void    (*close_device)(struct mdev_device *mdev);
+	int	(*bind_iommufd)(struct mdev_device *mdev,
+				struct vfio_device_bind_iommufd *bind);
+	void	(*unbind_iommufd)(struct mdev_device *mdev);
+	int	(*attach_ioas)(struct mdev_device *mdev,
+			       struct vfio_device_attach_ioas *attach);
+	void	(*detach_hwpt)(struct mdev_device *mdev,
+			       struct vfio_device_detach_hwpt *detach);
 	ssize_t (*read)(struct mdev_device *mdev, char __user *buf,
 			size_t count, loff_t *ppos);
 	ssize_t (*write)(struct mdev_device *mdev, const char __user *buf,
