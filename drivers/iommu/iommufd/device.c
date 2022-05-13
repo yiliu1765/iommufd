@@ -54,7 +54,7 @@ void iommufd_device_destroy(struct iommufd_object *obj)
  * The caller must undo this with iommufd_unbind_device()
  */
 struct iommufd_device *iommufd_bind_pci_device(int fd, struct pci_dev *pdev,
-					       u32 *id)
+					       unsigned int flags, u32 *id)
 {
 	struct iommufd_device *idev;
 	struct iommufd_ctx *ictx;
@@ -75,9 +75,11 @@ struct iommufd_device *iommufd_bind_pci_device(int fd, struct pci_dev *pdev,
 	 * FIXME: Use a device-centric iommu api and this won't work with
 	 * multi-device groups
 	 */
-	rc = iommu_group_claim_dma_owner(group, ictx->filp);
-	if (rc)
-		goto out_group_put;
+	if ((!flags & IOMMUFD_BIND_FLAGS_BYPASS_DMA_OWNERSHIP)) {
+		rc = iommu_group_claim_dma_owner(group, ictx->filp);
+		if (rc)
+			goto out_group_put;
+	}
 
 	idev = iommufd_object_alloc(ictx, idev, IOMMUFD_OBJ_DEVICE);
 	if (IS_ERR(idev)) {
@@ -102,7 +104,8 @@ struct iommufd_device *iommufd_bind_pci_device(int fd, struct pci_dev *pdev,
 	return idev;
 
 out_release_owner:
-	iommu_group_release_dma_owner(group);
+	if ((!flags & IOMMUFD_BIND_FLAGS_BYPASS_DMA_OWNERSHIP))
+		iommu_group_release_dma_owner(group);
 out_group_put:
 	iommu_group_put(group);
 out_file_put:
@@ -176,6 +179,45 @@ static int iommufd_device_setup_msi(struct iommufd_device *idev,
 	return 0;
 }
 
+static int
+__iommufd_device_attach_kernel_hwpt(struct iommufd_device *idev,
+				    struct iommufd_hw_pagetable *hwpt,
+				    unsigned int flags)
+{
+	phys_addr_t sw_msi_start = 0;
+	int rc;
+
+	/*
+	 * hwpt is now the exclusive owner of the group so this is the
+	 * first time enforce is called for this group.
+	 */
+	rc = iopt_table_enforce_group_resv_regions(
+		&hwpt->ioas->iopt, idev->group, &sw_msi_start);
+	if (rc)
+		return rc;
+
+	rc = iommufd_device_setup_msi(idev, hwpt, sw_msi_start, flags);
+	if (rc)
+		iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->group);
+
+	if (list_empty(&hwpt->devices)) {
+		rc = iopt_table_add_domain(&hwpt->ioas->iopt, hwpt->domain);
+		if (rc)
+			iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->group);
+	}
+
+	return rc;
+}
+
+static void
+__iommufd_device_detach_kernel_hwpt(struct iommufd_device *idev,
+				    struct iommufd_hw_pagetable *hwpt)
+{
+	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->group);
+	if (list_empty(&hwpt->devices))
+		iopt_table_remove_domain(&hwpt->ioas->iopt, hwpt->domain);
+}
+
 /**
  * iommufd_device_attach - Connect a device to an iommu_domain
  * @idev: device to attach
@@ -208,39 +250,22 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id,
 	 * hw_pagetable already has a device of the same group joined to tell if
 	 * we are the first and need to attach the group. */
 	if (!iommufd_hw_pagetable_has_group(hwpt, idev->group)) {
-		phys_addr_t sw_msi_start = 0;
-
 		rc = iommu_attach_group(hwpt->domain, idev->group);
 		if (rc)
 			goto out_unlock;
 
-		/*
-		 * hwpt is now the exclusive owner of the group so this is the
-		 * first time enforce is called for this group.
-		 */
-		rc = iopt_table_enforce_group_resv_regions(
-			&hwpt->ioas->iopt, idev->group, &sw_msi_start);
+		rc = __iommufd_device_attach_kernel_hwpt(idev, hwpt, flags);
 		if (rc)
 			goto out_detach;
-		rc = iommufd_device_setup_msi(idev, hwpt, sw_msi_start, flags);
-		if (rc)
-			goto out_iova;
 	}
 
 	idev->hwpt = hwpt;
-	if (list_empty(&hwpt->devices)) {
-		rc = iopt_table_add_domain(&hwpt->ioas->iopt, hwpt->domain);
-		if (rc)
-			goto out_iova;
-	}
 	list_add(&idev->devices_item, &hwpt->devices);
 	mutex_unlock(&hwpt->devices_lock);
 
 	*pt_id = idev->hwpt->obj.id;
 	return 0;
 
-out_iova:
-	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->group);
 out_detach:
 	iommu_detach_group(hwpt->domain, idev->group);
 out_unlock:
@@ -259,11 +284,9 @@ void iommufd_device_detach(struct iommufd_device *idev)
 	mutex_lock(&hwpt->devices_lock);
 	list_del(&idev->devices_item);
 	if (!iommufd_hw_pagetable_has_group(hwpt, idev->group)) {
-		iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->group);
+		__iommufd_device_detach_kernel_hwpt(idev, hwpt);
 		iommu_detach_group(hwpt->domain, idev->group);
 	}
-	if (list_empty(&hwpt->devices))
-		iopt_table_remove_domain(&hwpt->ioas->iopt, hwpt->domain);
 	mutex_unlock(&hwpt->devices_lock);
 
 	iommufd_hw_pagetable_put(idev->ictx, hwpt);
@@ -272,3 +295,76 @@ void iommufd_device_detach(struct iommufd_device *idev)
 	refcount_dec(&idev->obj.users);
 }
 EXPORT_SYMBOL_GPL(iommufd_device_detach);
+
+/**
+ * iommufd_device_attach_pasid - Connect a device+pasid to an iommu_domain
+ * @idev: device to attach
+ * @pasid: pasid to attach
+ * @pt_id: Input an IOMMUFD_OBJ_HW_PAGETABLE
+ * @flags: Optional flags
+ *
+ * This connects the device+pasid to an iommu_domain.
+ *
+ * The caller should return the resulting pt_id back to userspace.
+ * This function is undone by calling iommufd_device_detach_pasid().
+ */
+int iommufd_device_attach_pasid(struct iommufd_device *idev, u32 *pt_id,
+				ioasid_t pasid, unsigned int flags)
+{
+	struct iommufd_hw_pagetable *hwpt;
+	int rc;
+
+	refcount_inc(&idev->obj.users);
+
+	hwpt = iommufd_hw_pagetable_from_id(idev->ictx, *pt_id, idev->dev);
+	if (IS_ERR(hwpt)) {
+		rc = PTR_ERR(hwpt);
+		goto out_users;
+	}
+
+	mutex_lock(&hwpt->devices_lock);
+	rc = iommu_attach_device_pasid(hwpt->domain,
+				       idev->dev, pasid);
+	if (rc)
+		goto out_unlock;
+
+	rc = __iommufd_device_attach_kernel_hwpt(idev, hwpt, flags);
+	if (rc)
+		goto out_detach;
+
+	idev->hwpt = hwpt;
+	list_add(&idev->devices_item, &hwpt->devices);
+	mutex_unlock(&hwpt->devices_lock);
+
+	*pt_id = idev->hwpt->obj.id;
+	return 0;
+
+out_detach:
+	iommu_detach_device_pasid(hwpt->domain, idev->dev, pasid);
+out_unlock:
+	mutex_unlock(&hwpt->devices_lock);
+	iommufd_hw_pagetable_put(idev->ictx, hwpt);
+out_users:
+	refcount_dec(&idev->obj.users);
+	return rc;
+}
+EXPORT_SYMBOL_GPL(iommufd_device_attach_pasid);
+
+void iommufd_device_detach_pasid(struct iommufd_device *idev, ioasid_t pasid)
+{
+	struct iommufd_hw_pagetable *hwpt = idev->hwpt;
+
+	mutex_lock(&hwpt->devices_lock);
+	list_del(&idev->devices_item);
+
+	__iommufd_device_detach_kernel_hwpt(idev, hwpt);
+
+	iommu_detach_device_pasid(hwpt->domain, idev->dev, pasid);
+	mutex_unlock(&hwpt->devices_lock);
+
+	iommufd_hw_pagetable_put(idev->ictx, hwpt);
+	idev->hwpt = NULL;
+
+	refcount_dec(&idev->obj.users);
+}
+EXPORT_SYMBOL_GPL(iommufd_device_detach_pasid);
