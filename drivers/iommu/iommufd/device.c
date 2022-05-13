@@ -129,6 +129,23 @@ int iommufd_device_get_info(struct iommufd_ucmd *ucmd)
 	return -ENOTSUPP;
 }
 
+unsigned int
+iommufd_hw_pagetable_get_dev_id(struct iommufd_hw_pagetable *hwpt,
+				struct device *dev)
+{
+	struct iommufd_device *cur_dev, *idev = NULL;
+
+	mutex_lock(&hwpt->devices_lock);
+	list_for_each_entry (cur_dev, &hwpt->devices, devices_item)
+		if (cur_dev->dev == dev) {
+			idev = cur_dev;
+			break;
+		}
+	mutex_unlock(&hwpt->devices_lock);
+
+	return idev ? idev->obj.id : IOMMUFD_INVALID_ID;
+}
+
 static bool iommufd_hw_pagetable_has_group(struct iommufd_hw_pagetable *hwpt,
 					   struct iommu_group *group)
 {

@@ -4,8 +4,14 @@
  */
 #include <linux/iommu.h>
 #include <uapi/linux/iommufd.h>
+#include <linux/file.h>
+#include <linux/anon_inodes.h>
+#include <linux/circ_buf.h>
 
 #include "iommufd_private.h"
+
+static void
+iommufd_hw_pagetable_dma_fault_destroy(struct iommufd_hw_pagetable_user *uhwpt);
 
 void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 {
@@ -29,6 +35,7 @@ void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 		list_del(&hwpt->user.stage1_domains_item);
 		mutex_unlock(&parent->kernel.mutex);
 		refcount_dec(&parent->obj.users);
+		iommufd_hw_pagetable_dma_fault_destroy(&hwpt->user);
 	}
 
 	iommu_domain_free(hwpt->domain);
@@ -115,25 +122,31 @@ iommufd_hw_pagetable_iopf_handler(struct iommu_fault *fault, void *data)
 {
 	struct iommufd_hw_pagetable_user *uhwpt =
 				(struct iommufd_hw_pagetable_user *)data;
-	struct vfio_pci_device *vdev = (struct vfio_pci_device *)data;
-	struct iommufd_hwpt_dma_fault *reg =
+	struct iommufd_hw_pagetable *hwpt =
+		container_of(uhwpt, struct iommufd_hw_pagetable, user);
+	struct iommufd_hwpt_dma_fault *header =
 		(struct iommufd_hwpt_dma_fault *)uhwpt->fault_pages;
 	int head, tail, size;
 	struct iommu_fault *new;
+	u32 dev_id;
 	int ret = 0;
 
-	if (WARN_ON(!reg))
+	if (WARN_ON(!header))
 		return -ENOENT;
 
-	new = (struct iommu_fault *)(uhwpt->fault_pages + reg->offset +
-				     reg->head * reg->entry_size);
+	dev_id = iommufd_hw_pagetable_get_dev_id(hwpt, NULL); // wait for iommu core pass in dev
+	if (dev_id == IOMMUFD_INVALID_ID)
+		return -EINVAL;
+
+	new = (struct iommu_fault *)(uhwpt->fault_pages + header->offset +
+				     header->head * header->entry_size);
 
 	mutex_lock(&uhwpt->fault_queue_lock);
 
-	pr_dbg("%s, enque fault event\n", __func__);
-	head = reg->head;
-	tail = reg->tail;
-	size = reg->nb_entries;
+	pr_debug("%s, enque fault event\n", __func__);
+	head = header->head;
+	tail = header->tail;
+	size = header->nb_entries;
 
 	if (CIRC_SPACE(head, tail, size) < 1) {
 		ret = -ENOSPC;
@@ -141,17 +154,18 @@ iommufd_hw_pagetable_iopf_handler(struct iommu_fault *fault, void *data)
 	}
 
 	*new = *fault;
-	reg->head = (head + 1) % size;
+	header->head = (head + 1) % size;
 unlock:
 	mutex_unlock(&uhwpt->fault_queue_lock);
 	if (ret)
 		return ret;
 
 	mutex_lock(&uhwpt->notify_gate);
-	pr_dbg("%s, signal userspace!\n", __func__);
+	pr_debug("%s, signal userspace!\n", __func__);
 	if (uhwpt->trigger)
 		eventfd_signal(uhwpt->trigger, 1);
 	mutex_unlock(&uhwpt->notify_gate);
+
 	return 0;
 }
 
@@ -246,40 +260,28 @@ static void iommufd_hw_pagetable_eventfd_destroy(struct eventfd_ctx **ctx)
 	*ctx = NULL;
 }
 
-static int hwpt_fault_fops_release(struct inode *inode, struct file *filep)
+static size_t hwpt_dma_fault_rw(struct iommufd_hw_pagetable_user *uhwpt,
+				char __user *buf, size_t count,
+				loff_t *ppos, bool iswrite)
 {
-	struct iommufd_hwpt_dma_fault *reg = filep->private_data;
-
-	return 0;
-}
-
-static ssize_t hwpt_fault_fops_read(struct file *filep, char __user *buf,
-				     size_t count, loff_t *ppos)
-{
-	struct iommufd_hwpt_dma_fault *reg = filep->private_data;
-
-	return 0;
-}
-
-size_t hwpt_dma_fault_rw(struct vfio_pci_device *vdev, char __user *buf,
-			 size_t count, loff_t *ppos, bool iswrite)
-{
-	loff_t pos = *ppos & VFIO_PCI_OFFSET_MASK;
-	void *base = vdev->region[i].data;
+	loff_t pos = *ppos;
+	void *base = uhwpt->fault_pages;
+	size_t size = uhwpt->fault_region_size;
 	int ret = -EFAULT;
 
-	if (pos >= vdev->region[i].size)
+	if (pos >= size)
 		return -EINVAL;
 
-	count = min(count, (size_t)(vdev->region[i].size - pos));
+	count = min(count, (size_t)(size - pos));
 
 	mutex_lock(&uhwpt->fault_queue_lock);
 
 	if (iswrite) {
-		struct vfio_region_dma_fault *header =
-			(struct vfio_region_dma_fault *)base;
+		struct iommufd_hwpt_dma_fault *header =
+			(struct iommufd_hwpt_dma_fault *)base;
 		u32 new_tail;
 
+		/* Only allows write to the tail which is placed at offset 0 */
 		if (pos != 0 || count != 4) {
 			ret = -EINVAL;
 			goto unlock;
@@ -304,13 +306,21 @@ unlock:
 	return ret;
 }
 
-static ssize_t hwpt_fault_fops_write(struct file *filep,
-				      const char __user *buf,
-				      size_t count, loff_t *ppos)
+static ssize_t hwpt_fault_fops_read(struct file *filep, char __user *buf,
+				    size_t count, loff_t *ppos)
 {
 	struct iommufd_hw_pagetable_user *uhwpt = filep->private_data;
 
-	return 0;
+	return hwpt_dma_fault_rw(uhwpt, buf, count, ppos, false);
+}
+
+static ssize_t hwpt_fault_fops_write(struct file *filep,
+				     const char __user *buf,
+				     size_t count, loff_t *ppos)
+{
+	struct iommufd_hw_pagetable_user *uhwpt = filep->private_data;
+
+	return hwpt_dma_fault_rw(uhwpt, buf, count, ppos, true);
 }
 
 static const struct file_operations hwpt_fault_fops = {
@@ -321,6 +331,7 @@ static const struct file_operations hwpt_fault_fops = {
 
 static int iommufd_hw_pagetable_get_fault_fd(struct iommufd_hw_pagetable_user *uhwpt)
 {
+	struct file *filep;
 	int fdno, ret;
 
 	fdno = ret = get_unused_fd_flags(O_CLOEXEC);
@@ -328,7 +339,7 @@ static int iommufd_hw_pagetable_get_fault_fd(struct iommufd_hw_pagetable_user *u
 		return ret;
 
 	filep = anon_inode_getfile("[hwpt-fault]", &hwpt_fault_fops,
-				   uhwpt->fault_pages, O_RDWR);
+				   uhwpt, O_RDWR);
 	if (IS_ERR(filep)) {
 		put_unused_fd(fdno);
 		return PTR_ERR(filep);
@@ -368,6 +379,7 @@ iommufd_hw_pagetable_dma_fault_init(struct iommufd_hw_pagetable_user *uhwpt,
 	header->entry_size = sizeof(struct iommu_fault);
 	header->nb_entries = DMA_FAULT_RING_LENGTH;
 	header->offset = PAGE_SIZE;
+	uhwpt->fault_region_size = size;
 
 	rc = iommufd_hw_pagetable_eventfd_setup(&uhwpt->trigger, eventfd);
 	if (rc)
@@ -381,7 +393,7 @@ iommufd_hw_pagetable_dma_fault_init(struct iommufd_hw_pagetable_user *uhwpt,
 
 out_destroy_eventfd:
 	iommufd_hw_pagetable_eventfd_destroy(&uhwpt->trigger);
-out:
+out_free:
 	kfree(uhwpt->fault_pages);
 	return rc;
 }
@@ -389,8 +401,14 @@ out:
 static void
 iommufd_hw_pagetable_dma_fault_destroy(struct iommufd_hw_pagetable_user *uhwpt)
 {
+	struct iommufd_hwpt_dma_fault *header =
+		(struct iommufd_hwpt_dma_fault *)uhwpt->fault_pages;
+
+	WARN_ON(header->tail != header->head);
 	iommufd_hw_pagetable_eventfd_destroy(&uhwpt->trigger);
 	kfree(uhwpt->fault_pages);
+	mutex_destroy(&uhwpt->fault_queue_lock);
+	mutex_destroy(&uhwpt->notify_gate);
 }
 
 int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
