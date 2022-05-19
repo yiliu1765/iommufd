@@ -2112,11 +2112,14 @@ static int __iommu_attach_group(struct iommu_domain *domain,
 				struct iommu_group *group)
 {
 	int ret;
-
+/*
+ * Commment out for simple, in future, there should be an API
+ * to perform group->domain replacement which doesn't have this
+ * check.
 	if (group->domain && group->domain != group->default_domain &&
 	    group->domain != group->blocking_domain)
 		return -EBUSY;
-
+*/
 	ret = __iommu_group_for_each_dev(group, domain,
 					 iommu_group_do_attach_device);
 	if (ret == 0)
@@ -3266,6 +3269,7 @@ out_unlock:
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(iommu_attach_device_pasid);
 
 void iommu_detach_device_pasid(struct iommu_domain *domain, struct device *dev,
 			       ioasid_t pasid)
@@ -3279,6 +3283,7 @@ void iommu_detach_device_pasid(struct iommu_domain *domain, struct device *dev,
 
 	iommu_group_put(group);
 }
+EXPORT_SYMBOL_GPL(iommu_detach_device_pasid);
 
 /*
  * This is a variant of iommu_get_domain_for_dev(). It returns the existing
@@ -3307,3 +3312,30 @@ iommu_get_domain_for_dev_pasid(struct device *dev, ioasid_t pasid)
 
 	return domain;
 }
+
+/*
+ * Nesting domain interfaces.
+ */
+struct iommu_domain *
+iommu_alloc_nested_domain(struct bus_type *bus, struct iommu_domain *s2_domain,
+			  unsigned long s1_ptr, union iommu_stage1_config *cfg)
+{
+	struct iommu_domain *domain;
+
+	if (!bus || !bus->iommu_ops || !bus->iommu_ops->nested_domain_alloc)
+		return NULL;
+
+	domain = bus->iommu_ops->nested_domain_alloc(s2_domain, s1_ptr, cfg);
+	if (domain)
+		domain->type = IOMMU_DOMAIN_NESTING;
+
+	return domain;
+}
+EXPORT_SYMBOL_GPL(iommu_alloc_nested_domain);
+
+void iommu_domain_cache_inv(struct iommu_domain *domain,
+			    struct iommu_cache_invalidate_info *inv_info)
+{
+	domain->ops->cache_invalidate(domain, inv_info);
+}
+EXPORT_SYMBOL_GPL(iommu_domain_cache_inv);
