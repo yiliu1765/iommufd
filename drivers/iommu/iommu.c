@@ -1936,6 +1936,35 @@ struct iommu_domain *iommu_domain_alloc(struct bus_type *bus)
 }
 EXPORT_SYMBOL_GPL(iommu_domain_alloc);
 
+struct iommu_domain *iommu_domain_alloc_user(struct device *dev,
+					     struct iommu_domain *parent,
+					     void *user_data, size_t data_len)
+{
+	const struct iommu_ops *ops = dev_iommu_ops(dev);
+	struct iommu_domain *domain;
+
+	if (!ops->domain_alloc_user)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	/*
+	 * A user domain that doesn't nest on anything else is actually
+	 * an UNMANAGED domain.
+	 */
+	if (!parent)
+		return __iommu_domain_alloc(dev->bus, IOMMU_DOMAIN_UNMANAGED);
+
+	if (user_data || data_len)
+		return ERR_PTR(-EINVAL);
+
+	domain = ops->domain_alloc_user(dev, parent, user_data, data_len);
+	if (!domain)
+		return ERR_PTR(-ENOMEM);
+	domain->type = IOMMU_DOMAIN_NESTING;
+
+	return domain;
+}
+EXPORT_SYMBOL_GPL(iommu_domain_alloc_user);
+
 void iommu_domain_free(struct iommu_domain *domain)
 {
 	iommu_put_dma_cookie(domain);
