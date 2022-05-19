@@ -21,6 +21,11 @@
 #include "iommu.h"
 #include "pasid.h"
 
+#define IOMMU_VTD_PGTBL_MTS_MASK	(IOMMU_VTD_PGTBL_CD | \
+					 IOMMU_VTD_PGTBL_EMTE | \
+					 IOMMU_VTD_PGTBL_PCD | \
+					 IOMMU_VTD_PGTBL_PWT)
+
 /*
  * Intel IOMMU system wide PASID name space:
  */
@@ -744,4 +749,142 @@ void intel_pasid_setup_page_snoop_control(struct intel_iommu *iommu,
 	/* Device IOTLB doesn't need to be flushed in caching mode. */
 	if (!cap_caching_mode(iommu->cap))
 		devtlb_invalidation_with_pasid(iommu, dev, pasid);
+}
+
+/**
+ * intel_pasid_setup_nested() - Set up PASID entry for nested translation.
+ * This could be used for guest shared virtual address. In this case, the
+ * first level page tables are used for GVA-GPA translation in the guest,
+ * second level page tables are used for GPA-HPA translation.
+ *
+ * @iommu:      IOMMU which the device belong to
+ * @dev:        Device to be set up for translation
+ * @pasid:      PASID to be programmed in the device PASID table
+ * @s1_gpgd:    FLPTPTR: First Level Page translation pointer in GPA
+ * @s2_domain:  Domain info for setting up second level page tables
+ * @s1_cfg:     Additional PASID info from the guest bind request
+ */
+int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
+			     u32 pasid, pgd_t *s1_gpgd,
+			     struct dmar_domain *s2_domain,
+			     struct iommu_hwpt_intel_vtd *s1_cfg)
+{
+	struct pasid_entry *pte;
+	struct dma_pte *pgd;
+	u64 pgd_val;
+	int agaw;
+	u16 did, pgtt;
+
+	if (!ecap_nest(iommu->ecap)) {
+		pr_err_ratelimited("%s: No nested translation support\n",
+				   iommu->name);
+		return -ENODEV;
+	}
+
+	pte = intel_pasid_get_entry(dev, pasid);
+	if (WARN_ON(!pte))
+		return -EINVAL;
+
+	/*
+	 * Caller must ensure PASID entry is not in use, i.e. not bind the
+	 * same PASID to the same device twice. But special thing is
+	 * convert non-nested to nested. Such change is valid, so needs
+	 * to enhance the below check.
+	 */
+	pgtt = pasid_pte_get_pgtt(pte);
+	if (pgtt == PASID_ENTRY_PGTT_NESTED && pasid_pte_is_present(pte))
+		return -EBUSY;
+	pasid_clear_entry(pte);
+
+	/*
+	 * Sanity checking performed by caller to make sure address width
+	 * matching in two dimensions: CPU vs. IOMMU, guest vs. host.
+	 */
+	switch (s1_cfg->addr_width) {
+#ifdef CONFIG_X86
+	case ADDR_WIDTH_5LEVEL:
+		if (!cpu_feature_enabled(X86_FEATURE_LA57) ||
+		    !cap_5lp_support(iommu->cap)) {
+			dev_err_ratelimited(dev, "5-level paging not supported\n");
+			return -EINVAL;
+		}
+
+		pasid_set_flpm(pte, 1);
+		break;
+#endif
+	case ADDR_WIDTH_4LEVEL:
+		pasid_set_flpm(pte, 0);
+		break;
+	default:
+		dev_err_ratelimited(dev, "Invalid guest address width %d\n",
+				    s1_cfg->addr_width);
+		return -EINVAL;
+	}
+
+	/*
+	 * First level PGD is in GPA, must be supported by the second level.
+	 * Revisit: Is this sufficient?
+	 */
+	if ((uintptr_t)s1_gpgd > s2_domain->max_addr) {
+		dev_err_ratelimited(dev,
+				    "Guest PGD %lx not supported, max %llx\n",
+				    (uintptr_t)s1_gpgd, s2_domain->max_addr);
+		return -EINVAL;
+	}
+	pasid_set_flptr(pte, (uintptr_t)s1_gpgd);
+
+	if (s1_cfg->flags & IOMMU_VTD_PGTBL_SRE) {
+		if (!ecap_srs(iommu->ecap)) {
+			pr_err_ratelimited("No supervisor request support on %s\n",
+					   iommu->name);
+			return -EINVAL;
+		}
+		pasid_set_sre(pte);
+		/* Enable write protect WP if guest requested */
+		if (s1_cfg->flags & IOMMU_VTD_PGTBL_WPE)
+			pasid_set_wpe(pte);
+	}
+
+	if (s1_cfg->flags & IOMMU_VTD_PGTBL_EAFE) {
+		if (!ecap_eafs(iommu->ecap)) {
+			pr_err_ratelimited("No extended access flag support on %s\n",
+					   iommu->name);
+			return -EINVAL;
+		}
+		pasid_set_eafe(pte);
+	}
+
+	/*
+	 * Memory type is only applicable to devices inside processor coherent
+	 * domain. Will add MTS support once coherent devices are available.
+	 */
+	if (s1_cfg->flags & IOMMU_VTD_PGTBL_MTS_MASK) {
+		pr_warn_ratelimited("No memory type support %s\n",
+				    iommu->name);
+		return -EINVAL;
+	}
+
+	/* Setup the second level based on the given domain */
+	pgd = s2_domain->pgd;
+	agaw = iommu_skip_agaw(s2_domain, iommu, &pgd);
+	if (agaw < 0) {
+		dev_err_ratelimited(dev, "Invalid domain page table\n");
+		return -EINVAL;
+	}
+
+	pgd_val = virt_to_phys(pgd);
+	pasid_set_slptr(pte, pgd_val);
+	pasid_set_fault_enable(pte);
+
+	did = domain_id_iommu(s2_domain, iommu);
+	pasid_set_domain_id(pte, did);
+
+	pasid_set_address_width(pte, agaw);
+	pasid_set_page_snoop(pte, !!ecap_smpwc(iommu->ecap));
+
+	pasid_set_translation_type(pte, PASID_ENTRY_PGTT_NESTED);
+	pasid_set_present(pte);
+	pasid_flush_caches(iommu, pte, pasid, did);
+
+	return 0;
 }
