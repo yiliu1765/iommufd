@@ -612,6 +612,8 @@ struct intel_iommu {
 /* PCI domain-device relationship */
 struct device_domain_info {
 	struct list_head link;	/* link to domain siblings */
+	struct list_head nested; /* link to nested domain siblings */
+	int nested_users;
 	u32 segment;		/* PCI segment number */
 	u8 bus;			/* PCI bus number */
 	u8 devfn;		/* PCI devfn number */
@@ -652,6 +654,10 @@ domain_id_iommu(struct dmar_domain *domain, struct intel_iommu *iommu)
 	return info->did;
 }
 
+int domain_attach_iommu(struct dmar_domain *domain,
+			struct intel_iommu *iommu);
+void domain_detach_iommu(struct dmar_domain *domain,
+			 struct intel_iommu *iommu);
 /*
  * 0: readable
  * 1: writable
