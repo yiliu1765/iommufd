@@ -21,6 +21,7 @@
 #include <linux/miscdevice.h>
 #include <linux/mutex.h>
 #include <linux/bug.h>
+#include <linux/sched/mm.h>
 #include <uapi/linux/iommufd.h>
 
 #include "iommufd_private.h"
@@ -161,6 +162,8 @@ static int iommufd_destroy(struct iommufd_ucmd *ucmd)
 static int iommufd_fops_open(struct inode *inode, struct file *filp)
 {
 	struct iommufd_ctx *ictx;
+	struct mm_struct *mm;
+	int ret = 0;
 
 	ictx = kzalloc(sizeof(*ictx), GFP_KERNEL_ACCOUNT);
 	if (!ictx)
@@ -170,7 +173,20 @@ static int iommufd_fops_open(struct inode *inode, struct file *filp)
 	ictx->filp = filp;
 	mutex_init(&ictx->vfio_compat);
 	filp->private_data = ictx;
-	return 0;
+
+	mm = get_task_mm(current);
+	/* REVISIT: IOASID set quota must be enforced at per mm level, but
+	 * users should be able to open iommufd multiple times. For now we
+	 * just prevent multi-open. TODO: find a more explicit token
+	 * than mm.
+	 */
+	ictx->pasid_set = ioasid_set_alloc_with_mm(mm, 1000);
+	/* IOASID core will mmgrab to ensure life time alignment */
+	if (IS_ERR(ictx->pasid_set))
+		ret = -EBUSY;
+	mmput(mm);
+
+	return ret;
 }
 
 static int iommufd_fops_release(struct inode *inode, struct file *filp)
@@ -201,6 +217,12 @@ static int iommufd_fops_release(struct inode *inode, struct file *filp)
 		if (WARN_ON(!destroyed))
 			break;
 	}
+	ioasid_put_all_in_set(ictx->pasid_set);
+	/* There could be PASID refs held on the set, if so the set will not be
+	 * freed until reference to all its PASIDs are dropped.
+	 */
+	ioasid_set_destroy(ictx->pasid_set);
+
 	kfree(ictx);
 	return 0;
 }
@@ -214,6 +236,8 @@ union ucmd_buffer {
 	struct iommu_hwpt_invalidate_s1_cache cache;
 	struct iommu_destroy destroy;
 	struct iommu_device_info info;
+	struct iommu_alloc_pasid alloc_pasid;
+	struct iommu_free_pasid free_pasid;
 #ifdef CONFIG_IOMMUFD_TEST
 	struct iommu_test_cmd test;
 #endif
@@ -255,6 +279,10 @@ static struct iommufd_ioctl_op iommufd_ioctl_ops[] = {
 		 out_hwpt_id),
 	IOCTL_OP(IOMMU_HWPT_INVAL_S1_CACHE, iommufd_hwpt_invalidate_cache,
 		 struct iommu_hwpt_invalidate_s1_cache, info),
+	IOCTL_OP(IOMMU_ALLOC_PASID, iommufd_alloc_pasid, struct iommu_alloc_pasid,
+		 pasid),
+	IOCTL_OP(IOMMU_FREE_PASID, iommufd_free_pasid, struct iommu_free_pasid,
+		 pasid),
 #ifdef CONFIG_IOMMUFD_TEST
 	IOCTL_OP(IOMMU_TEST_CMD, iommufd_test, struct iommu_test_cmd, last),
 #endif
