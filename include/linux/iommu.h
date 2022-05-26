@@ -14,7 +14,7 @@
 #include <linux/err.h>
 #include <linux/of.h>
 #include <linux/ioasid.h>
-#include <uapi/linux/iommu.h>
+#include <uapi/linux/iommufd.h>
 
 #define IOMMU_READ	(1 << 0)
 #define IOMMU_WRITE	(1 << 1)
