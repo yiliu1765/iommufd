@@ -222,6 +222,7 @@ int iommufd_alloc_user_hwpt(struct iommufd_ucmd *ucmd);
 int iommufd_hwpt_invalidate_cache(struct iommufd_ucmd *ucmd);
 int iommufd_alloc_pasid(struct iommufd_ucmd *ucmd);
 int iommufd_free_pasid(struct iommufd_ucmd *ucmd);
+int iommufd_hwpt_page_response(struct iommufd_ucmd *ucmd);
 
 enum iommufd_hw_pagetable_type {
 	IOMMUFD_HWPT_IOAS_AUTO = 0,
