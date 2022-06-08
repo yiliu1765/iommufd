@@ -42,6 +42,7 @@ struct notifier_block;
 struct iommu_sva;
 struct iommu_fault_event;
 struct iommu_dma_cookie;
+struct iommu_hw_info;
 
 /* iommu fault flags */
 #define IOMMU_FAULT_READ	0x0
@@ -230,6 +231,7 @@ struct iommu_iotlb_gather {
  */
 struct iommu_ops {
 	bool (*capable)(enum iommu_cap);
+	int (*hw_info)(struct device *dev, struct iommu_hw_info *info);
 
 	/* Domain allocation and freeing by the iommu driver */
 	struct iommu_domain *(*domain_alloc)(unsigned iommu_domain_type);
@@ -386,6 +388,14 @@ struct dev_iommu {
 	struct iommu_device		*iommu_dev;
 	void				*priv;
 };
+
+struct iommu_hw_info {
+	unsigned int device_type;
+	unsigned int data_len;
+	void *data;
+};
+
+int iommu_get_hw_info(struct device *dev, struct iommu_hw_info *info);
 
 int iommu_device_register(struct iommu_device *iommu,
 			  const struct iommu_ops *ops,
@@ -1074,6 +1084,12 @@ static inline void iommu_group_release_dma_owner(struct iommu_group *group)
 static inline bool iommu_group_dma_owner_claimed(struct iommu_group *group)
 {
 	return false;
+}
+
+static inline int
+iommu_get_hw_info(struct device *dev, struct iommu_hw_info *info)
+{
+	return -EINVAL;
 }
 #endif /* CONFIG_IOMMU_API */
 
