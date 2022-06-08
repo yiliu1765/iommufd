@@ -45,6 +45,16 @@ config INTEL_IOMMU_DEBUGFS
 	  This option is -NOT- intended for production environments, and should
 	  only be enabled for debugging Intel IOMMU.
 
+config INTEL_IOMMU_TEST
+       tristate "PCI Intel IOMMU (VT-d) test driver"
+       depends on PCI && INTEL_IOMMU
+       select IOASID
+       help
+         Say Y or M here if you want be able to reserve a PCI device
+         for testing Intel IOMMU.
+
+         When in doubt, say N.
+
 config INTEL_IOMMU_SVM
 	bool "Support for Shared Virtual Memory with Intel IOMMU"
 	depends on X86_64
