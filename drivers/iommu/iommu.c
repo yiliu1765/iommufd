@@ -3275,3 +3275,13 @@ bool iommu_group_dma_owner_claimed(struct iommu_group *group)
 	return user;
 }
 EXPORT_SYMBOL_GPL(iommu_group_dma_owner_claimed);
+
+int iommu_get_hw_info(struct device *dev, struct iommu_hw_info *info)
+{
+	const struct iommu_ops *ops = dev_iommu_ops(dev);
+
+	if (!ops->hw_info)
+		return -EINVAL;
+	return ops->hw_info(dev, info);
+}
+EXPORT_SYMBOL_GPL(iommu_get_hw_info);
