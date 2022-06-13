@@ -66,6 +66,7 @@ int mdev_register_parent(struct mdev_parent *parent, struct device *dev,
 	init_rwsem(&parent->unreg_sem);
 	parent->dev = dev;
 	parent->mdev_driver = mdev_driver;
+	parent->available_instances = mdev_driver->max_instances;
 
 	if (!mdev_bus_compat_class) {
 		mdev_bus_compat_class = class_compat_register("mdev_bus");
@@ -135,6 +136,7 @@ static void mdev_device_release(struct device *dev)
 
 	mutex_lock(&mdev_list_lock);
 	list_del(&mdev->next);
+	mdev->type->parent->available_instances++;
 	mutex_unlock(&mdev_list_lock);
 
 	dev_dbg(&mdev->dev, "MDEV: destroying\n");
@@ -156,6 +158,14 @@ int mdev_device_create(struct mdev_type *type, const guid_t *uuid)
 			mutex_unlock(&mdev_list_lock);
 			return -EEXIST;
 		}
+	}
+
+	if (!drv->get_available) {
+		if (!parent->available_instances) {
+			mutex_unlock(&mdev_list_lock);
+			return -EUSERS;
+		}
+		parent->available_instances--;
 	}
 
 	mdev = kzalloc(sizeof(*mdev), GFP_KERNEL);
