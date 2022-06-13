@@ -131,6 +131,13 @@ int intel_gvt_init_vgpu_types(struct intel_gvt *gvt)
 	if (!gvt->types)
 		return -ENOMEM;
 
+	gvt->mdev_types = kcalloc(num_types, sizeof(*gvt->mdev_types),
+			     GFP_KERNEL);
+	if (!gvt->mdev_types) {
+		kfree(gvt->types);
+		return -ENOMEM;
+	}
+
 	min_low = MB_TO_BYTES(32);
 	for (i = 0; i < num_types; ++i) {
 		if (low_avail / vgpu_types[i].low_mm == 0)
@@ -150,19 +157,21 @@ int intel_gvt_init_vgpu_types(struct intel_gvt *gvt)
 						   high_avail / vgpu_types[i].high_mm);
 
 		if (GRAPHICS_VER(gvt->gt->i915) == 8)
-			sprintf(gvt->types[i].name, "GVTg_V4_%s",
+			sprintf(gvt->types[i].type.sysfs_name, "GVTg_V4_%s",
 				vgpu_types[i].name);
 		else if (GRAPHICS_VER(gvt->gt->i915) == 9)
-			sprintf(gvt->types[i].name, "GVTg_V5_%s",
+			sprintf(gvt->types[i].type.sysfs_name, "GVTg_V5_%s",
 				vgpu_types[i].name);
 
 		gvt_dbg_core("type[%d]: %s avail %u low %u high %u fence %u weight %u res %s\n",
-			     i, gvt->types[i].name,
+			     i, gvt->types[i].type.sysfs_name,
 			     gvt->types[i].avail_instance,
 			     gvt->types[i].low_gm_size,
 			     gvt->types[i].high_gm_size, gvt->types[i].fence,
 			     gvt->types[i].weight,
 			     vgpu_edid_str(gvt->types[i].resolution));
+
+		gvt->mdev_types[i] = &gvt->types[i].type;
 	}
 
 	gvt->num_types = i;
@@ -171,6 +180,7 @@ int intel_gvt_init_vgpu_types(struct intel_gvt *gvt)
 
 void intel_gvt_clean_vgpu_types(struct intel_gvt *gvt)
 {
+	kfree(gvt->mdev_types);
 	kfree(gvt->types);
 }
 
@@ -198,7 +208,7 @@ static void intel_gvt_update_vgpu_types(struct intel_gvt *gvt)
 						   fence_min);
 
 		gvt_dbg_core("update type[%d]: %s avail %u low %u high %u fence %u\n",
-		       i, gvt->types[i].name,
+		       i, gvt->types[i].type.sysfs_name,
 		       gvt->types[i].avail_instance, gvt->types[i].low_gm_size,
 		       gvt->types[i].high_gm_size, gvt->types[i].fence);
 	}

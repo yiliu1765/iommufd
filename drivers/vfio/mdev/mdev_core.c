@@ -30,26 +30,6 @@ struct device *mdev_parent_dev(struct mdev_device *mdev)
 EXPORT_SYMBOL(mdev_parent_dev);
 
 /*
- * Return the index in supported_type_groups that this mdev_device was created
- * from.
- */
-unsigned int mdev_get_type_group_id(struct mdev_device *mdev)
-{
-	return mdev->type->type_group_id;
-}
-EXPORT_SYMBOL(mdev_get_type_group_id);
-
-/*
- * Used in mdev_type_attribute sysfs functions to return the index in the
- * supported_type_groups that the sysfs is called from.
- */
-unsigned int mtype_get_type_group_id(struct mdev_type *mtype)
-{
-	return mtype->type_group_id;
-}
-EXPORT_SYMBOL(mtype_get_type_group_id);
-
-/*
  * Used in mdev_type_attribute sysfs functions to return the parent struct
  * device
  */
@@ -85,19 +65,19 @@ static int mdev_device_remove_cb(struct device *dev, void *data)
  * @parent: parent structure registered
  * @dev: device structure representing parent device.
  * @mdev_driver: Device driver to bind to the newly created mdev
+ * @types: Array of supported mdev types
+ * @nr_types: Number of entries in @types
  *
  * Returns a negative value on error, otherwise 0.
  */
 int mdev_register_parent(struct mdev_parent *parent, struct device *dev,
-		struct mdev_driver *mdev_driver)
+		struct mdev_driver *mdev_driver, struct mdev_type **types,
+		unsigned int nr_types)
 {
 	char *env_string = "MDEV_STATE=registered";
 	char *envp[] = { env_string, NULL };
 	int ret;
-
-	/* check for mandatory ops */
-	if (!mdev_driver->supported_type_groups)
-		return -EINVAL;
+	int i;
 
 	memset(parent, 0, sizeof(*parent));
 	init_rwsem(&parent->unreg_sem);
@@ -110,9 +90,23 @@ int mdev_register_parent(struct mdev_parent *parent, struct device *dev,
 			return -ENOMEM;
 	}
 
-	ret = parent_create_sysfs_files(parent);
-	if (ret)
+	parent->mdev_types_kset = kset_create_and_add("mdev_supported_types",
+					       NULL, &parent->dev->kobj);
+	if (!parent->mdev_types_kset)
+		return -ENOMEM;
+
+	for (i = 0; i < nr_types; i++) {
+		ret = mdev_type_add(parent, types[i]);
+		if (ret)
+			break;
+	}
+	parent->types = types;
+	parent->nr_types = i;
+
+	if (ret) {
+		mdev_unregister_parent(parent);
 		return ret;
+	}
 
 	ret = class_compat_create_link(mdev_bus_compat_class, dev, NULL);
 	if (ret)
@@ -132,13 +126,17 @@ void mdev_unregister_parent(struct mdev_parent *parent)
 {
 	char *env_string = "MDEV_STATE=unregistered";
 	char *envp[] = { env_string, NULL };
+	int i;
 
 	dev_info(parent->dev, "MDEV: Unregistering\n");
 
+	for (i = 0; i < parent->nr_types; i++)
+		mdev_type_remove(parent->types[i]);
+									  
 	down_write(&parent->unreg_sem);
 	class_compat_remove_link(mdev_bus_compat_class, parent->dev, NULL);
 	device_for_each_child(parent->dev, NULL, mdev_device_remove_cb);
-	parent_remove_sysfs_files(parent);
+	kset_unregister(parent->mdev_types_kset);
 	up_write(&parent->unreg_sem);
 
 	kobject_uevent_env(&parent->dev->kobj, KOBJ_CHANGE, envp);
