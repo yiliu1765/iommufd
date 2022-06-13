@@ -299,7 +299,6 @@ struct intel_gvt_firmware {
 #define NR_MAX_INTEL_VGPU_TYPES 20
 struct intel_vgpu_type {
 	struct mdev_type type;
-	unsigned int avail_instance;
 	unsigned int low_gm_size;
 	unsigned int high_gm_size;
 	unsigned int fence;
