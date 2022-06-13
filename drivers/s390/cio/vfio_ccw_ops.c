@@ -11,7 +11,6 @@
  */
 
 #include <linux/vfio.h>
-#include <linux/mdev.h>
 #include <linux/nospec.h>
 #include <linux/slab.h>
 
@@ -660,10 +659,11 @@ struct mdev_driver vfio_ccw_mdev_driver = {
 
 int vfio_ccw_mdev_reg(struct subchannel *sch)
 {
-	return mdev_register_device(&sch->dev, &vfio_ccw_mdev_driver);
+	return mdev_register_parent(&sch->parent, &sch->dev,
+				    &vfio_ccw_mdev_driver);
 }
 
 void vfio_ccw_mdev_unreg(struct subchannel *sch)
 {
-	mdev_unregister_device(&sch->dev);
+	mdev_unregister_parent(&sch->parent);
 }
