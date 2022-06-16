@@ -213,13 +213,14 @@ static int iommufd_device_do_attach(struct iommufd_device *idev,
 		rc = iommufd_device_setup_msi(idev, hwpt, sw_msi_start, flags);
 		if (rc)
 			goto out_iova;
+
+		if (list_empty(&hwpt->devices)) {
+			rc = iopt_table_add_domain(&hwpt->ioas->iopt, hwpt->domain);
+			if (rc)
+			goto out_iova;
+		}
 	}
 
-	if (list_empty(&hwpt->devices)) {
-		rc = iopt_table_add_domain(&hwpt->ioas->iopt, hwpt->domain);
-		if (rc)
-			goto out_iova;
-	}
 	idev->hwpt = hwpt;
 	refcount_inc(&hwpt->obj.users);
 	list_add(&idev->devices_item, &hwpt->devices);
@@ -357,15 +358,16 @@ void iommufd_device_detach(struct iommufd_device *idev)
 	mutex_lock(&hwpt->devices_lock);
 	list_del(&idev->devices_item);
 	if (!iommufd_hw_pagetable_has_group(hwpt, idev->group)) {
+		if (list_empty(&hwpt->devices)) {
+			iopt_table_remove_domain(&hwpt->ioas->iopt,
+						 hwpt->domain);
+			if (!list_empty(&hwpt->auto_domains_item)) {
+				list_del_init(&hwpt->auto_domains_item);
+				destroy_auto_domain = true;
+			}
+		}
 		iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->group);
 		iommu_detach_group(hwpt->domain, idev->group);
-	}
-	if (list_empty(&hwpt->devices)) {
-		iopt_table_remove_domain(&hwpt->ioas->iopt, hwpt->domain);
-		if (!list_empty(&hwpt->auto_domains_item)) {
-			list_del_init(&hwpt->auto_domains_item);
-			destroy_auto_domain = true;
-		}
 	}
 	mutex_unlock(&hwpt->devices_lock);
 	mutex_unlock(&hwpt->ioas->mutex);
