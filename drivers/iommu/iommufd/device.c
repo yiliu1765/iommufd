@@ -373,12 +373,13 @@ void iommufd_device_detach(struct iommufd_device *idev)
 	mutex_lock(&hwpt->devices_lock);
 	list_del(&idev->devices_item);
 	if (!iommufd_hw_pagetable_has_group(hwpt, idev->group)) {
+		if (list_empty(&hwpt->devices)) {
+			iopt_table_remove_domain(&hwpt->ioas->iopt,
+						 hwpt->domain);
+			list_del(&hwpt->hwpt_item);
+		}
 		iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->group);
 		iommu_detach_group(hwpt->domain, idev->group);
-	}
-	if (list_empty(&hwpt->devices)) {
-		iopt_table_remove_domain(&hwpt->ioas->iopt, hwpt->domain);
-		list_del(&hwpt->hwpt_item);
 	}
 	mutex_unlock(&hwpt->devices_lock);
 	mutex_unlock(&hwpt->ioas->mutex);
