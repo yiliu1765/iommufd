@@ -351,6 +351,41 @@ struct iommu_vfio_ioas {
 #define IOMMU_VFIO_IOAS _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VFIO_IOAS)
 
 /**
+ * struct iommu_hwpt_arm_smmuv3 - ARM SMMUv3 specific translation table info
+ *                                (IOMMU_HWPT_DATA_ARM_SMMUV3)
+ *
+ * @flags: Translation table entry attributes
+ * @ste_len: Length of the user Stream Table Entry
+ * @ste_uptr: User pointer to a user Stream Table Entry
+ * @event_len: Length of the returning event
+ * @out_event_uptr: User pointer to a returning event, to report a C_BAD_STE
+ *                  upon an STE configuration failure
+ *
+ * ARM SMMUv3 specific data to create page tables for a nested configuration.
+ *
+ * For a nested stage-1 translation table allocation, kernel will read all the
+ * information of a user space stage-1 Context Descriptor table from the given
+ * user space Stream Table Entry pointed by @ste_uptr. The @event_len and the
+ * @out_event_uptr in pair are optional. If they are both provided, kernel will
+ * report an STE error to the memory location pointed by @out_event_uptr, when
+ * the allocation fails due to some problem in the user space STE.
+ *
+ * As long as the SMMUv3 hardware supports a stage-1 page table, the default
+ * allocation of a page table in the kernel is always for a stage-1 type. So,
+ * this data structure can be also used to allocate a kernel-managed stage-2
+ * translation table, by setting IOMMU_SMMUV3_FLAG_S2 in the @flags, in which
+ * case only this flag matters and the kernel will ignore all other inputs.
+ */
+struct iommu_hwpt_arm_smmuv3 {
+#define IOMMU_SMMUV3_FLAG_S2   (1 << 0) /* if unset, stage-1 */
+	__aligned_u64 flags;
+	__aligned_u64 ste_len;
+	__aligned_u64 ste_uptr;
+	__aligned_u64 event_len;
+	__aligned_u64 out_event_uptr;
+};
+
+/**
  * enum iommufd_hwpt_alloc_flags - Flags for HWPT allocation
  * @IOMMU_HWPT_ALLOC_NEST_PARENT: If set, allocate a HWPT that can serve as
  *                                the parent HWPT in a nesting configuration.
@@ -391,10 +426,12 @@ struct iommu_hwpt_vtd_s1 {
  * enum iommu_hwpt_data_type - IOMMU HWPT Data Type
  * @IOMMU_HWPT_DATA_NONE: no data
  * @IOMMU_HWPT_DATA_VTD_S1: Intel VT-d stage-1 page table
+ * @IOMMU_HWPT_DATA_ARM_SMMUV3: ARM SMMUv3 Context Descriptor Table
  */
 enum iommu_hwpt_data_type {
 	IOMMU_HWPT_DATA_NONE,
 	IOMMU_HWPT_DATA_VTD_S1,
+	IOMMU_HWPT_DATA_ARM_SMMUV3,
 };
 
 /**
@@ -477,10 +514,12 @@ struct iommu_hw_info_vtd {
  * @IOMMU_HW_INFO_TYPE_NONE: Used by the drivers that do not report hardware
  *                           info
  * @IOMMU_HW_INFO_TYPE_INTEL_VTD: Intel VT-d iommu info type
+ * @IOMMU_HW_INFO_TYPE_ARM_SMMUV3: ARM SMMUv3 iommu info type
  */
 enum iommu_hw_info_type {
 	IOMMU_HW_INFO_TYPE_NONE,
 	IOMMU_HW_INFO_TYPE_INTEL_VTD,
+	IOMMU_HW_INFO_TYPE_ARM_SMMUV3,
 };
 
 /**
@@ -555,6 +594,25 @@ struct iommu_hwpt_vtd_s1_invalidate {
 	__aligned_u64 npages;
 	__u32 flags;
 	__u32 __reserved;
+};
+
+/**
+ * struct iommu_hwpt_arm_smmuv3_invalidate - ARM SMMUv3 cahce invalidation
+ *                                           (IOMMU_HWPT_DATA_ARM_SMMUV3)
+ * @cmd: 128-bit cache invalidation command that runs in SMMU CMDQ
+ *
+ * Supported command list:
+ *     CMDQ_OP_TLBI_NSNH_ALL
+ *     CMDQ_OP_TLBI_NH_VA
+ *     CMDQ_OP_TLBI_NH_VAA
+ *     CMDQ_OP_TLBI_NH_ALL
+ *     CMDQ_OP_TLBI_NH_ASID
+ *     CMDQ_OP_ATC_INV
+ *     CMDQ_OP_CFGI_CD
+ *     CMDQ_OP_CFGI_CD_ALL
+ */
+struct iommu_hwpt_arm_smmuv3_invalidate {
+	__aligned_u64 cmd[2];
 };
 
 /**
