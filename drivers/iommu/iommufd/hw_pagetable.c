@@ -168,6 +168,7 @@ out_abort:
 static const size_t iommufd_hwpt_alloc_data_size[] = {
 	[IOMMU_HWPT_TYPE_DEFAULT] = 0,
 	[IOMMU_HWPT_TYPE_VTD_S1] = sizeof(struct iommu_hwpt_intel_vtd),
+	[IOMMU_HWPT_TYPE_ARM_SMMUV3] = sizeof(struct iommu_hwpt_arm_smmuv3),
 };
 
 /*
@@ -178,6 +179,8 @@ const u64 iommufd_hwpt_type_bitmaps[] =  {
 	[IOMMU_HW_INFO_TYPE_DEFAULT] = BIT_ULL(IOMMU_HWPT_TYPE_DEFAULT),
 	[IOMMU_HW_INFO_TYPE_INTEL_VTD] = BIT_ULL(IOMMU_HWPT_TYPE_DEFAULT) |
 					 BIT_ULL(IOMMU_HWPT_TYPE_VTD_S1),
+	[IOMMU_HW_INFO_TYPE_ARM_SMMUV3] = BIT_ULL(IOMMU_HWPT_TYPE_DEFAULT) |
+					  BIT_ULL(IOMMU_HWPT_TYPE_ARM_SMMUV3),
 };
 
 /* Return true if type is supported, otherwise false */
@@ -324,6 +327,7 @@ out_put_idev:
  */
 static const size_t iommufd_hwpt_invalidate_info_size[] = {
 	[IOMMU_HWPT_TYPE_VTD_S1] = sizeof(struct iommu_hwpt_invalidate_intel_vtd),
+	[IOMMU_HWPT_TYPE_ARM_SMMUV3] = sizeof(struct iommu_hwpt_invalidate_arm_smmuv3),
 };
 
 int iommufd_hwpt_invalidate(struct iommufd_ucmd *ucmd)
