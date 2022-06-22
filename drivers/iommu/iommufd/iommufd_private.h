@@ -228,7 +228,7 @@ struct iommufd_hw_pagetable {
 	/* Head at iommufd_ioas::auto_domains */
 	struct list_head auto_domains_item;
 	struct mutex devices_lock;
-	struct list_head devices;
+	struct xarray devices;
 };
 
 struct iommufd_hw_pagetable *

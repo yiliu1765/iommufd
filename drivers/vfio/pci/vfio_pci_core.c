@@ -680,7 +680,7 @@ int vfio_pci_core_bind_iommufd(struct vfio_device *core_vdev,
 		goto out_unlock;
 	}
 
-	idev = iommufd_bind_device(bind->iommufd, &vdev->pdev->dev, &id);
+	idev = iommufd_bind_device(bind->iommufd, &vdev->pdev->dev, 0, &id);
 	if (IS_ERR(idev)) {
 		ret = PTR_ERR(idev);
 		goto out_unlock;
