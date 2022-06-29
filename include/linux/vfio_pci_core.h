@@ -16,6 +16,7 @@
 #include <linux/uuid.h>
 #include <linux/notifier.h>
 #include <linux/iommufd.h>
+#include <linux/xarray.h>
 
 #ifndef VFIO_PCI_CORE_H
 #define VFIO_PCI_CORE_H
@@ -96,6 +97,11 @@ struct vfio_pci_mmap_vma {
 	struct list_head	vma_next;
 };
 
+struct vfio_pci_hwpt {
+	ioasid_t	pasid;
+	u32		hwpt_id;
+};
+
 struct vfio_pci_core_device {
 	struct vfio_device	vdev;
 	struct pci_dev		*pdev;
@@ -125,6 +131,7 @@ struct vfio_pci_core_device {
 	bool			needs_reset;
 	bool			nointx;
 	bool			needs_pm_restore;
+	bool			has_sva;
 	struct pci_saved_state	*pci_saved_state;
 	struct pci_saved_state	*pm_save;
 	int			ioeventfds_nr;
@@ -143,7 +150,7 @@ struct vfio_pci_core_device {
 	struct mutex		idev_lock;
 	struct iommufd_device	*idev;
 	int			iommufd;
-	u32			hwpt_id;
+	struct xarray		pasid_xa;
 };
 
 #define is_intx(vdev) (vdev->irq_type == VFIO_PCI_INTX_IRQ_INDEX)
