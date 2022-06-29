@@ -33,6 +33,7 @@
 #include <linux/wait.h>
 #include <linux/sched/signal.h>
 #include <linux/iommufd.h>
+#include <linux/sched/mm.h>
 #include "vfio.h"
 
 #define DRIVER_VERSION	"0.3"
@@ -1879,19 +1880,75 @@ static long vfio_device_attach_ioas(struct vfio_device *device,
 			    sizeof(attach.out_hwpt_id)) ? -EFAULT : 0;
 }
 
+/* Try to find and get the reference on the input pasid */
+static int vfio_find_pasid(ioasid_t pasid, bool get)
+{
+	struct mm_struct *mm;
+	struct ioasid_set *ioasid_set;
+	int ret;
+
+	mm = get_task_mm(current);
+	ioasid_set = ioasid_find_mm_set(mm);
+	if (!ioasid_set) {
+		ret = -ENODEV;
+		goto out_put_mm;
+	}
+
+	/* Hold reference on the host pasid if caller indicates */
+
+	ret = ioasid_get(ioasid_set, pasid);
+	if (!ret && !get)
+		ioasid_put(ioasid_set, pasid);
+out_put_mm:
+	mmput(mm);
+	return ret;
+}
+
+static void vfio_put_pasid(ioasid_t pasid)
+{
+	struct mm_struct *mm;
+	struct ioasid_set *ioasid_set;
+
+	mm = get_task_mm(current);
+	ioasid_set = ioasid_find_mm_set(mm);
+	if (WARN_ON(unlikely(!ioasid_set)))
+		goto out_put_mm;
+	ioasid_put(ioasid_set, pasid);
+out_put_mm:
+	mmput(mm);
+}
+
 static long vfio_device_attach_hwpt(struct vfio_device *device,
 				    unsigned long arg)
 {
 	struct vfio_device_attach_hwpt attach;
-	unsigned long minsz;
+	unsigned long minsz, cursz;
+	int ret;
+	bool pasid_attach = false;
 
 	minsz = offsetofend(struct vfio_device_attach_hwpt, hwpt_id);
+	cursz = offsetofend(struct vfio_device_attach_hwpt, pasid);
+
+	memset((void *)&attach, 0, sizeof(attach));
+
 	if (copy_from_user(&attach, (void __user *)arg, minsz))
 		return -EFAULT;
 
-	if (attach.argsz < minsz || attach.flags ||
-	    attach.iommufd < 0 || attach.hwpt_id == IOMMUFD_INVALID_ID)
+	if (attach.argsz < minsz ||
+	    (attach.flags & ~VFIO_DEVICE_ATTACH_FLAG_PASID) ||
+	    attach.iommufd < 0 || attach.hwpt_id == IOMMUFD_INVALID_ID ||
+	    ((attach.flags & VFIO_DEVICE_ATTACH_FLAG_PASID) &&
+	     !pasid_valid(attach.pasid)))
 		return -EINVAL;
+
+	if (attach.argsz < cursz &&
+	    attach.flags & VFIO_DEVICE_ATTACH_FLAG_PASID)
+		return -EINVAL;
+
+	if (attach.argsz >= cursz &&
+	    copy_from_user((void *)&attach + minsz,
+			   (void __user *)arg + minsz, cursz - minsz))
+		return -EFAULT;
 
 	/* not allowed if the device is opened in legacy interface */
 	if (vfio_device_in_container(device))
@@ -1900,7 +1957,16 @@ static long vfio_device_attach_hwpt(struct vfio_device *device,
 	if (unlikely(!device->ops->attach_hwpt))
 		return -EINVAL;
 
-	return device->ops->attach_hwpt(device, &attach);
+	pasid_attach = attach.flags & VFIO_DEVICE_ATTACH_FLAG_PASID;
+	if (pasid_attach &&
+	    vfio_find_pasid(attach.pasid, true))
+		return -EINVAL;
+
+	ret = device->ops->attach_hwpt(device, &attach);
+	if (ret && pasid_attach)
+		vfio_put_pasid(attach.pasid);
+
+	return ret;
 
 }
 
@@ -1908,14 +1974,30 @@ static long vfio_device_detach_hwpt(struct vfio_device *device,
 				    unsigned long arg)
 {
 	struct vfio_device_detach_hwpt detach;
-	unsigned long minsz;
+	unsigned long minsz, cursz;
+	bool pasid_detach = false;
 
 	minsz = offsetofend(struct vfio_device_detach_hwpt, iommufd);
+	cursz = offsetofend(struct vfio_device_detach_hwpt, pasid);
+
+	memset((void *)&detach, 0, sizeof(detach));
 	if (copy_from_user(&detach, (void __user *)arg, minsz))
 		return -EFAULT;
 
-	if (detach.argsz < minsz || detach.flags || detach.iommufd < 0)
+	if (detach.argsz < minsz || detach.iommufd < 0 ||
+	    (detach.flags & ~VFIO_DEVICE_DETACH_FLAG_PASID) ||
+	    ((detach.flags & VFIO_DEVICE_DETACH_FLAG_PASID) &&
+	     !pasid_valid(detach.pasid)))
 		return -EINVAL;
+
+	if (detach.argsz < cursz &&
+	    detach.flags & VFIO_DEVICE_DETACH_FLAG_PASID)
+		return -EINVAL;
+
+	if (detach.argsz >= cursz &&
+	    copy_from_user((void *)&detach + minsz,
+			   (void __user *)arg + minsz, cursz - minsz))
+		return -EFAULT;
 
 	/* not allowed if the device is opened in legacy interface */
 	if (vfio_device_in_container(device))
@@ -1924,7 +2006,15 @@ static long vfio_device_detach_hwpt(struct vfio_device *device,
 	if (unlikely(!device->ops->detach_hwpt))
 		return -EINVAL;
 
+	pasid_detach = detach.flags & VFIO_DEVICE_DETACH_FLAG_PASID;
+	if (pasid_detach &&
+	    vfio_find_pasid(detach.pasid, false))
+		return -EINVAL;
+
 	device->ops->detach_hwpt(device, &detach);
+
+	if (pasid_detach)
+		vfio_put_pasid(detach.pasid);
 
 	return 0;
 }
