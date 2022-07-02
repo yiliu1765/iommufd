@@ -3261,9 +3261,13 @@ int iommu_attach_device_pasid(struct iommu_domain *domain, struct device *dev,
 	}
 
 	mutex_lock(&group->mutex);
+	/* WA: Needs to support replace domain */
+	xa_store(&group->pasid_array, pasid, domain, GFP_KERNEL);
+/*
 	curr = xa_cmpxchg(&group->pasid_array, pasid, NULL, domain, GFP_KERNEL);
 	if (curr)
 		goto out_unlock;
+*/
 	ret = domain->ops->set_dev_pasid(domain, dev, pasid);
 	if (ret)
 		xa_erase(&group->pasid_array, pasid);
