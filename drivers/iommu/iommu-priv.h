@@ -15,6 +15,21 @@ static inline const struct iommu_ops *dev_iommu_ops(struct device *dev)
 	return dev->iommu->iommu_dev->ops;
 }
 
+static inline struct iommu_domain *iommu_get_unmanaged_domain(struct device *dev)
+{
+	const struct iommu_ops *ops;
+
+	if (!dev->iommu || !dev->iommu->iommu_dev)
+		goto attached_domain;
+
+	ops = dev_iommu_ops(dev);
+	if (ops->get_unmanaged_domain)
+		return ops->get_unmanaged_domain(dev);
+
+attached_domain:
+	return iommu_get_domain_for_dev(dev);
+}
+
 int iommu_group_replace_domain(struct iommu_group *group,
 			       struct iommu_domain *new_domain);
 

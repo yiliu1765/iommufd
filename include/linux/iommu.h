@@ -275,6 +275,8 @@ struct iommu_ops {
 						  struct iommu_domain *parent,
 						  const void *user_data);
 
+	struct iommu_domain *(*get_unmanaged_domain)(struct device *dev);
+
 	struct iommu_device *(*probe_device)(struct device *dev);
 	void (*release_device)(struct device *dev);
 	void (*probe_finalize)(struct device *dev);
