@@ -100,6 +100,24 @@ static void parse_driver_options(struct arm_smmu_device *smmu)
 	} while (arm_smmu_options[++i].opt);
 }
 
+static struct arm_smmu_s2_cfg *to_s2_cfg(struct arm_smmu_domain *smmu_domain)
+{
+	if (!smmu_domain)
+		return NULL;
+
+	switch (smmu_domain->stage) {
+	case ARM_SMMU_DOMAIN_S1:
+		if (smmu_domain->s2)
+			return &smmu_domain->s2->s2_cfg;
+		return NULL;
+	case ARM_SMMU_DOMAIN_S2:
+		return &smmu_domain->s2_cfg;
+	case ARM_SMMU_DOMAIN_BYPASS:
+	default:
+		return NULL;
+	}
+}
+
 /* Low-level queue manipulation functions */
 static bool queue_has_space(struct arm_smmu_ll_queue *q, u32 n)
 {
@@ -1277,6 +1295,7 @@ static void arm_smmu_write_strtab_ent(struct arm_smmu_master *master, u32 sid,
 		switch (smmu_domain->stage) {
 		case ARM_SMMU_DOMAIN_S1:
 			s1_cfg = &smmu_domain->s1_cfg;
+			s2_cfg = to_s2_cfg(smmu_domain);
 			break;
 		case ARM_SMMU_DOMAIN_S2:
 			s2_cfg = &smmu_domain->s2_cfg;
@@ -1846,6 +1865,7 @@ int arm_smmu_atc_inv_domain(struct arm_smmu_domain *smmu_domain, int ssid,
 static void arm_smmu_tlb_inv_context(void *cookie)
 {
 	struct arm_smmu_domain *smmu_domain = cookie;
+	struct arm_smmu_s2_cfg *s2_cfg = to_s2_cfg(smmu_domain);
 	struct arm_smmu_device *smmu = smmu_domain->smmu;
 	struct arm_smmu_cmdq_ent cmd;
 
@@ -1860,7 +1880,7 @@ static void arm_smmu_tlb_inv_context(void *cookie)
 		arm_smmu_tlb_inv_asid(smmu, smmu_domain->s1_cfg.cd.asid);
 	} else {
 		cmd.opcode	= CMDQ_OP_TLBI_S12_VMALL;
-		cmd.tlbi.vmid	= smmu_domain->s2_cfg.vmid;
+		cmd.tlbi.vmid	= s2_cfg->vmid;
 		arm_smmu_cmdq_issue_cmd_with_sync(smmu, &cmd);
 	}
 	arm_smmu_atc_inv_domain(smmu_domain, 0, 0, 0);
@@ -1931,6 +1951,7 @@ static void arm_smmu_tlb_inv_range_domain(unsigned long iova, size_t size,
 					  size_t granule, bool leaf,
 					  struct arm_smmu_domain *smmu_domain)
 {
+	struct arm_smmu_s2_cfg *s2_cfg = to_s2_cfg(smmu_domain);
 	struct arm_smmu_cmdq_ent cmd = {
 		.tlbi = {
 			.leaf	= leaf,
@@ -1943,7 +1964,7 @@ static void arm_smmu_tlb_inv_range_domain(unsigned long iova, size_t size,
 		cmd.tlbi.asid	= smmu_domain->s1_cfg.cd.asid;
 	} else {
 		cmd.opcode	= CMDQ_OP_TLBI_S2_IPA;
-		cmd.tlbi.vmid	= smmu_domain->s2_cfg.vmid;
+		cmd.tlbi.vmid	= s2_cfg->vmid;
 	}
 	__arm_smmu_tlb_inv_range(&cmd, iova, size, granule, smmu_domain);
 
