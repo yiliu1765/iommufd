@@ -221,6 +221,7 @@ static int vfio_ccw_sch_probe(struct subchannel *sch)
 	dev_set_drvdata(&sch->dev, private);
 
 	sch->mdev_type.sysfs_name = "io";
+	sch->mdev_type.pretty_name = "I/O subchannel (Non-QDIO)";
 	sch->mdev_types[0] = &sch->mdev_type;
 	ret = mdev_register_parent(&sch->parent, &sch->dev,
 				   &vfio_ccw_mdev_driver,
