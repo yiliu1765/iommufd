@@ -299,7 +299,7 @@ of the VFIO AP mediated matrix device driver::
    |  MDEV CORE  |
    |   MODULE    |
    |   mdev.ko   |
-   | +---------+ | mdev_register_device() +--------------+
+   | +---------+ | mdev_register_parent() +--------------+
    | |Physical | +<-----------------------+              |
    | | device  | |                        |  vfio_ap.ko  |<-> matrix
    | |interface| +----------------------->+              |    device
