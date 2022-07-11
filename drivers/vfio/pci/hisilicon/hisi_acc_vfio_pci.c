@@ -1236,51 +1236,47 @@ static const struct vfio_device_ops hisi_acc_vfio_pci_ops = {
 	.match = vfio_pci_core_match,
 };
 
-static int
+static void
 hisi_acc_vfio_pci_migrn_init(struct hisi_acc_vf_core_device *hisi_acc_vdev,
-			     struct pci_dev *pdev, struct hisi_qm *pf_qm)
+			     struct pci_dev *pdev, struct hisi_qm *pf_qm, int vf_id)
 {
-	int vf_id;
-
-	vf_id = pci_iov_vf_id(pdev);
-	if (vf_id < 0)
-		return vf_id;
-
 	hisi_acc_vdev->vf_id = vf_id + 1;
 	hisi_acc_vdev->core_device.vdev.migration_flags =
 					VFIO_MIGRATION_STOP_COPY;
 	hisi_acc_vdev->pf_qm = pf_qm;
 	hisi_acc_vdev->vf_dev = pdev;
 	mutex_init(&hisi_acc_vdev->state_mutex);
-
-	return 0;
 }
 
 static int hisi_acc_vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	struct hisi_acc_vf_core_device *hisi_acc_vdev;
 	struct hisi_qm *pf_qm;
+	const struct vfio_device_ops *dev_ops;
 	int ret;
+	int vf_id;
 
-	hisi_acc_vdev = kzalloc(sizeof(*hisi_acc_vdev), GFP_KERNEL);
-	if (!hisi_acc_vdev)
-		return -ENOMEM;
+	vf_id = pci_iov_vf_id(pdev);
+	if (vf_id < 0)
+		return vf_id;
 
 	pf_qm = hisi_acc_get_pf_qm(pdev);
 	if (pf_qm && pf_qm->ver >= QM_HW_V3) {
-		ret = hisi_acc_vfio_pci_migrn_init(hisi_acc_vdev, pdev, pf_qm);
-		if (!ret) {
-			vfio_pci_core_init_device(&hisi_acc_vdev->core_device, pdev,
-						  &hisi_acc_vfio_pci_migrn_ops);
-		} else {
-			pci_warn(pdev, "migration support failed, continue with generic interface\n");
-			vfio_pci_core_init_device(&hisi_acc_vdev->core_device, pdev,
-						  &hisi_acc_vfio_pci_ops);
-		}
+		dev_ops = &hisi_acc_vfio_pci_migrn_ops;
 	} else {
-		vfio_pci_core_init_device(&hisi_acc_vdev->core_device, pdev,
-					  &hisi_acc_vfio_pci_ops);
+		pci_warn(pdev, "migration support failed, continue with generic interface\n");
+		dev_ops = &hisi_acc_vfio_pci_ops;
 	}
+
+	hisi_acc_vdev = vfio_alloc_device(hisi_acc_vf_core_device, core_device.vdev,
+					 &pdev->dev, &hisi_acc_vfio_pci_migrn_ops);
+	if (!hisi_acc_vdev)
+		return -ENOMEM;
+
+	vfio_pci_core_init_device(&hisi_acc_vdev->core_device, pdev);
+
+	if (dev_ops == &hisi_acc_vfio_pci_migrn_ops)
+		hisi_acc_vfio_pci_migrn_init(hisi_acc_vdev, pdev, pf_qm, vf_id);
 
 	dev_set_drvdata(&pdev->dev, &hisi_acc_vdev->core_device);
 	ret = vfio_pci_core_register_device(&hisi_acc_vdev->core_device);
@@ -1289,8 +1285,7 @@ static int hisi_acc_vfio_pci_probe(struct pci_dev *pdev, const struct pci_device
 	return 0;
 
 out_free:
-	vfio_pci_core_uninit_device(&hisi_acc_vdev->core_device);
-	kfree(hisi_acc_vdev);
+	vfio_pci_core_dealloc_device(&hisi_acc_vdev->core_device);
 	return ret;
 }
 
@@ -1299,8 +1294,7 @@ static void hisi_acc_vfio_pci_remove(struct pci_dev *pdev)
 	struct hisi_acc_vf_core_device *hisi_acc_vdev = hssi_acc_drvdata(pdev);
 
 	vfio_pci_core_unregister_device(&hisi_acc_vdev->core_device);
-	vfio_pci_core_uninit_device(&hisi_acc_vdev->core_device);
-	kfree(hisi_acc_vdev);
+	vfio_pci_core_dealloc_device(&hisi_acc_vdev->core_device);
 }
 
 static const struct pci_device_id hisi_acc_vfio_pci_table[] = {
