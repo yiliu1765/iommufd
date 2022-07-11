@@ -252,7 +252,7 @@ void intel_gvt_destroy_vgpu(struct intel_vgpu *vgpu)
 	intel_vgpu_dmabuf_cleanup(vgpu);
 	mutex_unlock(&vgpu->vgpu_lock);
 
-	vfree(vgpu);
+	vfio_put_device(&vgpu->vfio_device);
 }
 
 #define IDLE_VGPU_IDR 0
@@ -323,7 +323,7 @@ void intel_gvt_destroy_idle_vgpu(struct intel_vgpu *vgpu)
  * pointer to intel_vgpu, error pointer if failed.
  */
 struct intel_vgpu *intel_gvt_create_vgpu(struct intel_gvt *gvt,
-		const struct intel_vgpu_config *conf)
+		const struct intel_vgpu_config *conf, struct mdev_device *mdev)
 {
 	struct drm_i915_private *dev_priv = gvt->gt->i915;
 	struct intel_vgpu *vgpu;
@@ -333,7 +333,8 @@ struct intel_vgpu *intel_gvt_create_vgpu(struct intel_gvt *gvt,
 			BYTES_TO_MB(conf->low_mm), BYTES_TO_MB(conf->high_mm),
 			conf->fence);
 
-	vgpu = vzalloc(sizeof(*vgpu));
+	vgpu = vfio_alloc_device(intel_vgpu, vfio_device,
+				 &mdev->dev, &intel_vgpu_dev_ops);
 	if (!vgpu)
 		return ERR_PTR(-ENOMEM);
 
@@ -419,7 +420,7 @@ out_clean_idr:
 	idr_remove(&gvt->vgpu_idr, vgpu->id);
 out_unlock:
 	mutex_unlock(&gvt->lock);
-	vfree(vgpu);
+	vfio_put_device(&vgpu->vfio_device);
 	return ERR_PTR(ret);
 }
 
