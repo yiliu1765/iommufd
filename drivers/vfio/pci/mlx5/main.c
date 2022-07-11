@@ -595,10 +595,13 @@ static int mlx5vf_pci_probe(struct pci_dev *pdev,
 	struct mlx5vf_pci_core_device *mvdev;
 	int ret;
 
-	mvdev = kzalloc(sizeof(*mvdev), GFP_KERNEL);
+	mvdev = vfio_alloc_device(mlx5vf_pci_core_device, core_device.vdev,
+				  &pdev->dev, &mlx5vf_pci_ops);
 	if (!mvdev)
 		return -ENOMEM;
-	vfio_pci_core_init_device(&mvdev->core_device, pdev, &mlx5vf_pci_ops);
+
+	vfio_pci_core_init_device(&mvdev->core_device, pdev);
+
 	mlx5vf_cmd_set_migratable(mvdev);
 	dev_set_drvdata(&pdev->dev, &mvdev->core_device);
 	ret = vfio_pci_core_register_device(&mvdev->core_device);
@@ -608,8 +611,7 @@ static int mlx5vf_pci_probe(struct pci_dev *pdev,
 
 out_free:
 	mlx5vf_cmd_remove_migratable(mvdev);
-	vfio_pci_core_uninit_device(&mvdev->core_device);
-	kfree(mvdev);
+	vfio_pci_core_dealloc_device(&mvdev->core_device);
 	return ret;
 }
 
@@ -619,8 +621,7 @@ static void mlx5vf_pci_remove(struct pci_dev *pdev)
 
 	vfio_pci_core_unregister_device(&mvdev->core_device);
 	mlx5vf_cmd_remove_migratable(mvdev);
-	vfio_pci_core_uninit_device(&mvdev->core_device);
-	kfree(mvdev);
+	vfio_pci_core_dealloc_device(&mvdev->core_device);
 }
 
 static const struct pci_device_id mlx5vf_pci_table[] = {
