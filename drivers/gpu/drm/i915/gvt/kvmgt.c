@@ -1546,7 +1546,7 @@ static const struct attribute_group *intel_vgpu_groups[] = {
 	NULL,
 };
 
-static const struct vfio_device_ops intel_vgpu_dev_ops = {
+const struct vfio_device_ops intel_vgpu_dev_ops = {
 	.open_device	= intel_vgpu_open_device,
 	.close_device	= intel_vgpu_close_device,
 	.read		= intel_vgpu_read,
@@ -1555,6 +1555,7 @@ static const struct vfio_device_ops intel_vgpu_dev_ops = {
 	.ioctl		= intel_vgpu_ioctl,
 	.dma_unmap	= intel_vgpu_dma_unmap,
 };
+EXPORT_SYMBOL_GPL(intel_vgpu_dev_ops);
 
 static int intel_vgpu_probe(struct mdev_device *mdev)
 {
@@ -1568,14 +1569,11 @@ static int intel_vgpu_probe(struct mdev_device *mdev)
 	if (!type)
 		return -EINVAL;
 
-	vgpu = intel_gvt_create_vgpu(gvt, type);
+	vgpu = intel_gvt_create_vgpu(gvt, type, &mdev->dev);
 	if (IS_ERR(vgpu)) {
 		gvt_err("failed to create intel vgpu: %ld\n", PTR_ERR(vgpu));
 		return PTR_ERR(vgpu);
 	}
-
-	vfio_init_group_dev(&vgpu->vfio_device, &mdev->dev,
-			    &intel_vgpu_dev_ops);
 
 	dev_set_drvdata(&mdev->dev, vgpu);
 	ret = vfio_register_emulated_iommu_dev(&vgpu->vfio_device);

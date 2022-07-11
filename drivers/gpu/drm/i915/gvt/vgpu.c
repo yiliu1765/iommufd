@@ -303,7 +303,7 @@ void intel_gvt_destroy_vgpu(struct intel_vgpu *vgpu)
 	intel_gvt_update_vgpu_types(gvt);
 	mutex_unlock(&gvt->lock);
 
-	vfree(vgpu);
+	vfio_put_device(&vgpu->vfio_device);
 }
 
 #define IDLE_VGPU_IDR 0
@@ -364,7 +364,7 @@ void intel_gvt_destroy_idle_vgpu(struct intel_vgpu *vgpu)
 }
 
 static struct intel_vgpu *__intel_gvt_create_vgpu(struct intel_gvt *gvt,
-		struct intel_vgpu_creation_params *param)
+		struct intel_vgpu_creation_params *param, struct device *dev)
 {
 	struct drm_i915_private *dev_priv = gvt->gt->i915;
 	struct intel_vgpu *vgpu;
@@ -374,7 +374,8 @@ static struct intel_vgpu *__intel_gvt_create_vgpu(struct intel_gvt *gvt,
 			param->low_gm_sz, param->high_gm_sz,
 			param->fence_sz);
 
-	vgpu = vzalloc(sizeof(*vgpu));
+	vgpu = vfio_alloc_device(intel_vgpu, vfio_device,
+				 dev, &intel_vgpu_dev_ops);
 	if (!vgpu)
 		return ERR_PTR(-ENOMEM);
 
@@ -456,7 +457,7 @@ out_clean_vgpu_mmio:
 out_clean_idr:
 	idr_remove(&gvt->vgpu_idr, vgpu->id);
 out_free_vgpu:
-	vfree(vgpu);
+	vfio_put_device(&vgpu->vfio_device);
 	return ERR_PTR(ret);
 }
 
@@ -471,7 +472,8 @@ out_free_vgpu:
  * pointer to intel_vgpu, error pointer if failed.
  */
 struct intel_vgpu *intel_gvt_create_vgpu(struct intel_gvt *gvt,
-				struct intel_vgpu_type *type)
+					 struct intel_vgpu_type *type,
+					 struct device *dev)
 {
 	struct intel_vgpu_creation_params param;
 	struct intel_vgpu *vgpu;
@@ -488,7 +490,7 @@ struct intel_vgpu *intel_gvt_create_vgpu(struct intel_gvt *gvt,
 	param.high_gm_sz = BYTES_TO_MB(param.high_gm_sz);
 
 	mutex_lock(&gvt->lock);
-	vgpu = __intel_gvt_create_vgpu(gvt, &param);
+	vgpu = __intel_gvt_create_vgpu(gvt, &param, dev);
 	if (!IS_ERR(vgpu)) {
 		/* calculate left instance change for types */
 		intel_gvt_update_vgpu_types(gvt);

@@ -490,7 +490,7 @@ static void vfio_device_release(struct kref *kref)
 	if (device->ops && device->ops->release)
 		device->ops->release(device);
 
-	kfree(device);
+	kvfree(device);
 }
 
 /*
@@ -511,7 +511,7 @@ struct vfio_device *_vfio_alloc_device(size_t size, struct device *dev,
 	if (WARN_ON(size < sizeof(struct vfio_device)))
 		return NULL;
 
-	device = kzalloc(size, GFP_KERNEL);
+	device = kvzalloc(size, GFP_KERNEL);
 	if (!device)
 		return NULL;
 
