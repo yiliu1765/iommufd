@@ -74,6 +74,7 @@ struct vfio_device {
  */
 struct vfio_device_ops {
 	char	*name;
+	bool	release_no_kfree;
 	int	(*open_device)(struct vfio_device *vdev);
 	void	(*close_device)(struct vfio_device *vdev);
 	void	(*release)(struct vfio_device *vdev);

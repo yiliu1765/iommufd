@@ -487,10 +487,24 @@ static void vfio_device_release(struct kref *kref)
 
 	vfio_release_device_set(device);
 
-	if (device->ops && device->ops->release)
+	if (device->ops && device->ops->release) {
 		device->ops->release(device);
+		if (device->ops->release_no_kfree)
+			return;
+	}
 
 	kvfree(device);
+}
+
+static void vfio_init_device(struct vfio_device *device,
+			     struct device *dev,
+			     const struct vfio_device_ops *ops)
+{
+	init_completion(&device->comp);
+	device->dev = dev;
+	device->ops = ops;
+
+	kref_init(&device->kref);
 }
 
 /*
@@ -515,12 +529,7 @@ struct vfio_device *_vfio_alloc_device(size_t size, struct device *dev,
 	if (!device)
 		return NULL;
 
-	init_completion(&device->comp);
-	device->dev = dev;
-	device->ops = ops;
-
-	kref_init(&device->kref);
-
+	vfio_init_device(device, dev, ops);
 	return device;
 }
 EXPORT_SYMBOL(_vfio_alloc_device);
@@ -538,18 +547,25 @@ void vfio_put_device(struct vfio_device *device)
 }
 EXPORT_SYMBOL(vfio_put_device);
 
+/*
+ * This is deprecated and should not be used by any driver except vfio-ccw.
+ * Due to the life cycle mess ccw driver has to allocate/free its priviate
+ * device data outside of vfio device life cycle, hence needs a separate
+ * init/uninit interface.
+ *
+ */
 void vfio_init_group_dev(struct vfio_device *device, struct device *dev,
 			 const struct vfio_device_ops *ops)
 {
-	init_completion(&device->comp);
-	device->dev = dev;
-	device->ops = ops;
+	WARN_ON(!ops->release_no_kfree);
+	vfio_init_device(device, dev, ops);
 }
 EXPORT_SYMBOL_GPL(vfio_init_group_dev);
 
+/* This is deprecated and should not be used by any driver except vfio-ccw. */
 void vfio_uninit_group_dev(struct vfio_device *device)
 {
-	vfio_release_device_set(device);
+	kref_put(&device->kref, vfio_device_release);
 }
 EXPORT_SYMBOL_GPL(vfio_uninit_group_dev);
 

@@ -170,6 +170,8 @@ static struct vfio_ccw_private *vfio_ccw_alloc_private(struct subchannel *sch)
 
 	if (!private->crw_region)
 		goto out_free_schib;
+
+	init_completion(&private->comp);
 	return private;
 
 out_free_schib:

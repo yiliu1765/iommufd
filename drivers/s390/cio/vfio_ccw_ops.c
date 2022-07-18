@@ -122,6 +122,8 @@ err_atomic:
 static void vfio_ccw_mdev_remove(struct mdev_device *mdev)
 {
 	struct vfio_ccw_private *private = dev_get_drvdata(mdev->dev.parent);
+	bool interrupted = false;
+	long rc;
 
 	VFIO_CCW_MSG_EVENT(2, "sch %x.%x.%04x: remove\n",
 			   private->sch->schid.cssid,
@@ -131,6 +133,38 @@ static void vfio_ccw_mdev_remove(struct mdev_device *mdev)
 	vfio_unregister_group_dev(&private->vdev);
 
 	vfio_uninit_group_dev(&private->vdev);
+
+	/*
+	 * This logic is not required if ccw logic conforms to the
+	 * life cycle of vfio_device (to be fixed). However current
+	 * ccw logic requires vfio_ccw_private to be free'ed in css
+	 * remove instead of in the 'release' path of vfio device as
+	 * other drivers do.
+	 *
+	 * Hence use a workaround by waiting until the last user
+	 * releases its reference on vdev via a completion notified
+	 * from the ccw release callback. Then clear vfio device and
+	 * delay kfree() to css remove.
+	 */
+	rc = try_wait_for_completion(&private->comp);
+	while (rc <= 0) {
+		if (interrupted)
+			rc = wait_for_completion_timeout(&private->comp, HZ);
+		else {
+			rc = wait_for_completion_interruptible_timeout(
+				&private->comp, HZ);
+			if (rc < 0) {
+				interrupted = true;
+				dev_warn(vdev->dev,
+					 "subchannel is currently in use, "
+					 "task \"%s\" (%d) "
+					 "blocked until subchannel is released",
+					 current->comm, task_pid_nr(current));
+			}
+		}
+	}
+	memset(&private->vdev, 0, sizeof(private->vdev));
+
 	atomic_inc(&private->avail);
 }
 
@@ -176,6 +210,14 @@ static void vfio_ccw_mdev_close_device(struct vfio_device *vdev)
 
 	vfio_ccw_fsm_event(private, VFIO_CCW_EVENT_CLOSE);
 	vfio_ccw_unregister_dev_regions(private);
+}
+
+static void vfio_ccw_release(struct vfio_device *vdev)
+{
+	struct vfio_ccw_private *private;
+
+	private = container_of(vdev, struct vfio_ccw_private, vdev);
+	complete(&private->comp);
 }
 
 static ssize_t vfio_ccw_mdev_read_io_region(struct vfio_ccw_private *private,
@@ -592,8 +634,10 @@ static void vfio_ccw_mdev_request(struct vfio_device *vdev, unsigned int count)
 }
 
 static const struct vfio_device_ops vfio_ccw_dev_ops = {
+	.release_no_kfree = true,
 	.open_device = vfio_ccw_mdev_open_device,
 	.close_device = vfio_ccw_mdev_close_device,
+	.release = vfio_ccw_release,
 	.read = vfio_ccw_mdev_read,
 	.write = vfio_ccw_mdev_write,
 	.ioctl = vfio_ccw_mdev_ioctl,
