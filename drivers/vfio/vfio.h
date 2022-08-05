@@ -10,6 +10,7 @@
 #include <linux/cdev.h>
 #include <linux/module.h>
 
+struct iommufd_ctx;
 struct iommu_group;
 struct vfio_device;
 struct vfio_container;
@@ -54,6 +55,7 @@ struct vfio_group {
 	struct kvm			*kvm;
 	struct file			*opened_file;
 	struct blocking_notifier_head	notifier;
+	struct iommufd_ctx		*iommufd;
 };
 
 /* events for the backend driver notify callback */
