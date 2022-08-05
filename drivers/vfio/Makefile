@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 vfio_virqfd-y := virqfd.o
 
-vfio-y += container.o
+vfio-$(CONFIG_VFIO_CONTAINER) += container.o
 vfio-y += vfio_main.o
 vfio-$(CONFIG_IOMMUFD) += vfio_iommufd.o
 

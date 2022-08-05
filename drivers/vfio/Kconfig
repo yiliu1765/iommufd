@@ -3,7 +3,7 @@ menuconfig VFIO
 	tristate "VFIO Non-Privileged userspace driver framework"
 	select IOMMU_API
 	depends on IOMMUFD || !IOMMUFD
-	select VFIO_IOMMU_TYPE1 if MMU && (X86 || S390 || ARM || ARM64)
+	select VFIO_CONTAINER if IOMMUFD=n
 	help
 	  VFIO provides a framework for secure userspace device drivers.
 	  See Documentation/driver-api/vfio.rst for more details.
@@ -11,24 +11,25 @@ menuconfig VFIO
 	  If you don't know what to do here, say N.
 
 if VFIO
+config VFIO_CONTAINER
+	bool "Support for the VFIO container /dev/vfio/vfio"
+	default y
+	help
+	  The VFIO container is the classic interface to VFIO.
+	  If N is selected here then IOMMUFD will provide the
+	  character device.
+
+	  Unless testing IOMMUFD say N here.
+
+if VFIO_CONTAINER
 config VFIO_IOMMU_TYPE1
 	tristate
-	default n
+	default MMU && (X86 || S390 || ARM || ARM64)
 
 config VFIO_IOMMU_SPAPR_TCE
 	tristate
 	depends on SPAPR_TCE_IOMMU
 	default VFIO
-
-config VFIO_SPAPR_EEH
-	tristate
-	depends on EEH && VFIO_IOMMU_SPAPR_TCE
-	default VFIO
-
-config VFIO_VIRQFD
-	tristate
-	select EVENTFD
-	default n
 
 config VFIO_NOIOMMU
 	bool "VFIO No-IOMMU support"
@@ -43,6 +44,17 @@ config VFIO_NOIOMMU
 	  this mode since there is no IOMMU to provide DMA translation.
 
 	  If you don't know what to do here, say N.
+endif
+
+config VFIO_SPAPR_EEH
+	tristate
+	depends on EEH && VFIO_IOMMU_SPAPR_TCE
+	default VFIO
+
+config VFIO_VIRQFD
+	tristate
+	select EVENTFD
+	default n
 
 source "drivers/vfio/pci/Kconfig"
 source "drivers/vfio/platform/Kconfig"

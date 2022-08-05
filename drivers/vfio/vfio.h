@@ -49,7 +49,9 @@ struct vfio_group {
 	struct list_head		device_list;
 	struct mutex			device_lock;
 	struct list_head		vfio_next;
+#if IS_ENABLED(CONFIG_VFIO_CONTAINER)
 	struct list_head		container_next;
+#endif
 	enum vfio_group_type		type;
 	struct rw_semaphore		group_rwsem;
 	struct kvm			*kvm;
@@ -58,6 +60,7 @@ struct vfio_group {
 	struct iommufd_ctx		*iommufd;
 };
 
+#if IS_ENABLED(CONFIG_VFIO_CONTAINER)
 /* events for the backend driver notify callback */
 enum vfio_iommu_notify_type {
 	VFIO_IOMMU_CONTAINER_CLOSE = 0,
@@ -124,6 +127,74 @@ int vfio_container_dma_rw(struct vfio_device *device, dma_addr_t iova,
 
 int __init vfio_container_init(void);
 void vfio_container_cleanup(void);
+#else
+static inline struct vfio_container *
+vfio_container_from_file(struct file *filep)
+{
+	return NULL;
+}
+
+static inline int vfio_container_use(struct vfio_group *group)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void vfio_container_unuse(struct vfio_group *group)
+{
+}
+
+static inline int vfio_container_attach_group(struct vfio_container *container,
+					      struct vfio_group *group)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void vfio_container_detach_group(struct vfio_group *group)
+{
+}
+
+static inline void vfio_container_register_device(struct vfio_device *device)
+{
+}
+
+static inline void vfio_container_unregister_device(struct vfio_device *device)
+{
+}
+
+static inline long
+vfio_container_ioctl_check_extension(struct vfio_container *container,
+				     unsigned long arg)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int vfio_container_pin_pages(struct vfio_device *device,
+					   dma_addr_t iova, int npage, int prot,
+					   struct page **pages)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void vfio_container_unpin_pages(struct vfio_device *device,
+					      dma_addr_t iova, int npage)
+{
+}
+
+static inline int vfio_container_dma_rw(struct vfio_device *device,
+					dma_addr_t iova, void *data, size_t len,
+					bool write)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int vfio_container_init(void)
+{
+	return 0;
+}
+static inline void vfio_container_cleanup(void)
+{
+}
+#endif
 
 #if IS_ENABLED(CONFIG_IOMMUFD)
 int vfio_iommufd_bind(struct vfio_device *device, struct iommufd_ctx *ictx);
