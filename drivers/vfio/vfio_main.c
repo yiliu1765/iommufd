@@ -35,6 +35,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/interval_tree.h>
 #include <linux/iova_bitmap.h>
+#include <linux/iommufd.h>
 #include "vfio.h"
 
 #define DRIVER_VERSION	"0.3"
@@ -641,6 +642,17 @@ EXPORT_SYMBOL_GPL(vfio_unregister_group_dev);
 /*
  * VFIO Group fd, /dev/vfio/$GROUP
  */
+
+static bool vfio_group_has_iommu(struct vfio_group *group)
+{
+	lockdep_assert_held(&group->group_rwsem);
+	if (!group->container)
+		WARN_ON(group->container_users);
+	else
+		WARN_ON(!group->container_users);
+	return group->container || group->iommufd;
+}
+
 /*
  * VFIO_GROUP_UNSET_CONTAINER should fail if there are other users or
  * if there was no container to unset.  Since the ioctl is called on
@@ -652,15 +664,21 @@ static int vfio_group_ioctl_unset_container(struct vfio_group *group)
 	int ret = 0;
 
 	down_write(&group->group_rwsem);
-	if (!group->container) {
+	if (!vfio_group_has_iommu(group)) {
 		ret = -EINVAL;
 		goto out_unlock;
 	}
-	if (group->container_users != 1) {
-		ret = -EBUSY;
-		goto out_unlock;
+	if (group->container) {
+		if (group->container_users != 1) {
+			ret = -EBUSY;
+			goto out_unlock;
+		}
+		vfio_group_detach_container(group);
 	}
-	vfio_group_detach_container(group);
+	if (group->iommufd) {
+		iommufd_ctx_put(group->iommufd);
+		group->iommufd = NULL;
+	}
 
 out_unlock:
 	up_write(&group->group_rwsem);
@@ -671,6 +689,7 @@ static int vfio_group_ioctl_set_container(struct vfio_group *group,
 					  int __user *arg)
 {
 	struct vfio_container *container;
+	struct iommufd_ctx *iommufd;
 	struct fd f;
 	int ret;
 	int fd;
@@ -683,16 +702,28 @@ static int vfio_group_ioctl_set_container(struct vfio_group *group,
 		return -EBADF;
 
 	down_write(&group->group_rwsem);
-	if (group->container || WARN_ON(group->container_users)) {
-		ret = -EINVAL;
+	if (vfio_group_has_iommu(group)) {
+		ret = -EBUSY;
 		goto out_unlock;
 	}
+
 	container = vfio_container_from_file(f.file);
-	ret = -EINVAL;
 	if (container) {
 		ret = vfio_container_attach_group(container, group);
 		goto out_unlock;
 	}
+
+	iommufd = iommufd_ctx_from_file(f.file);
+	if (!IS_ERR(iommufd)) {
+		u32 ioas_id;
+
+		group->iommufd = iommufd;
+		ret = iommufd_vfio_compat_ioas_id(iommufd, &ioas_id);
+		goto out_unlock;
+	}
+
+	/* The FD passed is not recognized. */
+	ret = -EBADF;
 
 out_unlock:
 	up_write(&group->group_rwsem);
@@ -722,10 +753,17 @@ static int vfio_device_first_open(struct vfio_device *device)
 	 * the device driver will use it, it must obtain a reference and release
 	 * it during close_device.
 	 */
-	down_read(&device->group->group_rwsem);
-	ret = vfio_container_use(device->group);
-	if (ret)
+	down_write(&device->group->group_rwsem);
+	if (!vfio_group_has_iommu(device->group)) {
+		ret = -EINVAL;
 		goto err_module_put;
+	}
+
+	if (device->group->container) {
+		ret = vfio_container_use(device->group);
+		if (ret)
+			goto err_module_put;
+	}
 
 	device->kvm = device->group->kvm;
 	if (device->ops->open_device) {
@@ -733,15 +771,17 @@ static int vfio_device_first_open(struct vfio_device *device)
 		if (ret)
 			goto err_container;
 	}
-	vfio_device_container_register(device);
-	up_read(&device->group->group_rwsem);
+	if (device->group->container)
+		vfio_device_container_register(device);
+	up_write(&device->group->group_rwsem);
 	return 0;
 
 err_container:
-	vfio_container_unuse(device->group);
-err_module_put:
+	if (device->group->container)
+		vfio_container_unuse(device->group);
 	device->kvm = NULL;
-	up_read(&device->group->group_rwsem);
+err_module_put:
+	up_write(&device->group->group_rwsem);
 	module_put(device->dev->driver->owner);
 	return ret;
 }
@@ -750,13 +790,15 @@ static void vfio_device_last_close(struct vfio_device *device)
 {
 	lockdep_assert_held(&device->dev_set->lock);
 
-	down_read(&device->group->group_rwsem);
-	vfio_device_container_unregister(device);
+	down_write(&device->group->group_rwsem);
+	if (device->group->container)
+		vfio_device_container_unregister(device);
 	if (device->ops->close_device)
 		device->ops->close_device(device);
 	device->kvm = NULL;
-	vfio_container_unuse(device->group);
-	up_read(&device->group->group_rwsem);
+	if (device->group->container)
+		vfio_container_unuse(device->group);
+	up_write(&device->group->group_rwsem);
 	module_put(device->dev->driver->owner);
 }
 
@@ -866,7 +908,7 @@ static int vfio_group_ioctl_get_status(struct vfio_group *group,
 	status.flags = 0;
 
 	down_read(&group->group_rwsem);
-	if (group->container)
+	if (group->container || group->iommufd)
 		status.flags |= VFIO_GROUP_FLAGS_CONTAINER_SET |
 				VFIO_GROUP_FLAGS_VIABLE;
 	else if (!iommu_group_dma_owner_claimed(group->iommu_group))
@@ -950,6 +992,10 @@ static int vfio_group_fops_release(struct inode *inode, struct file *filep)
 	WARN_ON(group->notifier.head);
 	if (group->container)
 		vfio_group_detach_container(group);
+	if (group->iommufd) {
+		iommufd_ctx_put(group->iommufd);
+		group->iommufd = NULL;
+	}
 	group->opened_file = NULL;
 	up_write(&group->group_rwsem);
 
