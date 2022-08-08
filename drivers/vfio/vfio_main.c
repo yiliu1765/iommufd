@@ -47,6 +47,9 @@ static struct vfio {
 	dev_t				group_devt;
 } vfio;
 
+bool vfio_allow_unsafe_interrupts;
+EXPORT_SYMBOL_GPL(vfio_allow_unsafe_interrupts);
+
 static DEFINE_XARRAY(vfio_device_set_xa);
 static const struct file_operations vfio_group_fops;
 
