@@ -131,4 +131,6 @@ extern bool vfio_noiommu __read_mostly;
 enum { vfio_noiommu = false };
 #endif
 
+extern bool vfio_allow_unsafe_interrupts;
+
 #endif
