@@ -16,6 +16,8 @@
 #include <uapi/linux/vfio.h>
 
 struct kvm;
+struct iommufd_ctx;
+struct iommufd_device;
 
 /*
  * VFIO devices can be placed in a set, this allows all devices to share this
@@ -50,6 +52,10 @@ struct vfio_device {
 	struct completion comp;
 	struct list_head group_next;
 	struct list_head iommu_entry;
+#if IS_ENABLED(CONFIG_IOMMUFD)
+	struct iommufd_device *iommufd_device;
+	bool iommufd_attached;
+#endif
 };
 
 /**
@@ -72,6 +78,10 @@ struct vfio_device {
  */
 struct vfio_device_ops {
 	char	*name;
+	int	(*bind_iommufd)(struct vfio_device *vdev,
+				struct iommufd_ctx *ictx,u32 *out_device_id);
+	void 	(*unbind_iommufd)(struct vfio_device *vdev);
+	int 	(*attach_ioas)(struct vfio_device *vdev, u32 *pt_id);
 	int	(*open_device)(struct vfio_device *vdev);
 	void	(*close_device)(struct vfio_device *vdev);
 	ssize_t	(*read)(struct vfio_device *vdev, char __user *buf,
@@ -87,6 +97,21 @@ struct vfio_device_ops {
 	int	(*device_feature)(struct vfio_device *device, u32 flags,
 				  void __user *arg, size_t argsz);
 };
+
+#if IS_ENABLED(CONFIG_IOMMUFD)
+int vfio_iommufd_physical_bind(struct vfio_device *vdev,
+			       struct iommufd_ctx *ictx, u32 *out_device_id);
+void vfio_iommufd_physical_unbind(struct vfio_device *vdev);
+int vfio_iommufd_physical_attach_ioas(struct vfio_device *vdev, u32 *pt_id);
+#else
+#define vfio_iommufd_physical_bind                                      \
+	((int (*)(struct vfio_device * vdev, struct iommufd_ctx * ictx, \
+		  u32 * out_device_id)) NULL)
+#define vfio_iommufd_physical_unbind \
+	((void (*)(struct vfio_device * vdev)) NULL)
+#define vfio_iommufd_physical_attach_ioas \
+	((int (*)(struct vfio_device * vdev, u32 * pt_id)) NULL)
+#endif
 
 /**
  * @migration_set_state: Optional callback to change the migration state for

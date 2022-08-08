@@ -405,6 +405,11 @@ static int __vfio_register_dev(struct vfio_device *device,
 	if (IS_ERR(group))
 		return PTR_ERR(group);
 
+	if (WARN_ON(device->ops->bind_iommufd &&
+		    (!device->ops->unbind_iommufd ||
+		     !device->ops->attach_ioas)))
+		return -EINVAL;
+
 	/*
 	 * If the driver doesn't specify a set then the device is added to a
 	 * singleton set just for itself.
@@ -653,6 +658,10 @@ static int vfio_device_first_open(struct vfio_device *device)
 		ret = vfio_container_use(device->group);
 		if (ret)
 			goto err_module_put;
+	} else if (device->group->iommufd) {
+		ret = vfio_iommufd_bind(device, device->group->iommufd);
+		if (ret)
+			goto err_module_put;
 	}
 
 	device->kvm = device->group->kvm;
@@ -669,6 +678,7 @@ static int vfio_device_first_open(struct vfio_device *device)
 err_container:
 	if (device->group->container)
 		vfio_container_unuse(device->group);
+	vfio_iommufd_unbind(device);
 	device->kvm = NULL;
 err_module_put:
 	up_write(&device->group->group_rwsem);
@@ -688,6 +698,7 @@ static void vfio_device_last_close(struct vfio_device *device)
 	device->kvm = NULL;
 	if (device->group->container)
 		vfio_container_unuse(device->group);
+	vfio_iommufd_unbind(device);
 	up_write(&device->group->group_rwsem);
 	module_put(device->dev->driver->owner);
 }
@@ -1344,6 +1355,18 @@ bool vfio_file_enforced_coherent(struct file *file)
 	if (group->container) {
 		ret = vfio_container_ioctl_check_extension(group->container,
 							   VFIO_DMA_CC_IOMMU);
+	} else if (group->iommufd) {
+		struct vfio_device *device;
+
+		mutex_lock(&group->device_lock);
+		ret = true;
+		list_for_each_entry(device, &group->device_list, group_next) {
+			if (!vfio_device_try_get(device))
+				continue;
+			ret &= vfio_iommufd_enforced_coherent(device);
+			vfio_device_put(device);
+		}
+		mutex_unlock(&group->device_lock);
 	} else {
 		/*
 		 * Since the coherency state is determined only once a container

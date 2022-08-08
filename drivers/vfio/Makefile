@@ -3,6 +3,7 @@ vfio_virqfd-y := virqfd.o
 
 vfio-y += container.o
 vfio-y += vfio_main.o
+vfio-$(CONFIG_IOMMUFD) += vfio_iommufd.o
 
 obj-$(CONFIG_VFIO) += vfio.o
 obj-$(CONFIG_VFIO_VIRQFD) += vfio_virqfd.o
