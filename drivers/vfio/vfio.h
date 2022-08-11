@@ -105,8 +105,6 @@ struct vfio_iommu_driver {
 int vfio_register_iommu_driver(const struct vfio_iommu_driver_ops *ops);
 void vfio_unregister_iommu_driver(const struct vfio_iommu_driver_ops *ops);
 
-bool vfio_assert_device_open(struct vfio_device *device);
-
 struct vfio_container *vfio_container_from_file(struct file *filep);
 int vfio_container_use(struct vfio_group *group);
 void vfio_container_unuse(struct vfio_group *group);
@@ -117,6 +115,13 @@ void vfio_container_register_device(struct vfio_device *device);
 void vfio_container_unregister_device(struct vfio_device *device);
 long vfio_container_ioctl_check_extension(struct vfio_container *container,
 					  unsigned long arg);
+int vfio_container_pin_pages(struct vfio_device *device, dma_addr_t iova,
+			     int npage, int prot, struct page **pages);
+void vfio_container_unpin_pages(struct vfio_device *device, dma_addr_t iova,
+				int npage);
+int vfio_container_dma_rw(struct vfio_device *device, dma_addr_t iova,
+			  void *data, size_t len, bool write);
+
 int __init vfio_container_init(void);
 void vfio_container_cleanup(void);
 
