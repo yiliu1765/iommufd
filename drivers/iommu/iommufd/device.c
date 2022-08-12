@@ -394,3 +394,126 @@ void iommufd_device_detach(struct iommufd_device *idev)
 	refcount_dec(&idev->obj.users);
 }
 EXPORT_SYMBOL_GPL(iommufd_device_detach);
+
+struct iommufd_access_priv {
+	struct iommufd_object obj;
+	struct iommufd_access pub;
+	struct iommufd_ctx *ictx;
+	struct iommufd_ioas *ioas;
+	const struct iommufd_access_ops *ops;
+	void *data;
+	u32 ioas_access_list_id;
+};
+
+void iommufd_access_destroy_object(struct iommufd_object *obj)
+{
+	struct iommufd_access_priv *access =
+		container_of(obj, struct iommufd_access_priv, obj);
+
+	WARN_ON(xa_erase(&access->ioas->access_list,
+			 access->ioas_access_list_id) != access);
+	iommufd_ctx_put(access->ictx);
+	refcount_dec(&access->ioas->obj.users);
+}
+
+struct iommufd_access *
+iommufd_access_create(struct iommufd_ctx *ictx, u32 ioas_id,
+		      const struct iommufd_access_ops *ops, void *data)
+{
+	struct iommufd_access_priv *access;
+	struct iommufd_object *obj;
+	int rc;
+
+	/*
+	 * FIXME: should this be an object? It is much like a device but I can't
+	 * forsee a use for it right now. On the other hand it costs almost
+	 * nothing to do, so may as well..
+	 */
+	access = iommufd_object_alloc(ictx, access, IOMMUFD_OBJ_ACCESS);
+	if (IS_ERR(access))
+		return &access->pub;
+
+	obj = iommufd_get_object(ictx, ioas_id, IOMMUFD_OBJ_IOAS);
+	if (IS_ERR(obj)) {
+		rc = PTR_ERR(obj);
+		goto out_abort;
+	}
+	access->ioas = container_of(obj, struct iommufd_ioas, obj);
+	iommufd_put_object_keep_user(obj);
+
+	rc = xa_alloc(&access->ioas->access_list, &access->ioas_access_list_id,
+		      access, xa_limit_16b, GFP_KERNEL_ACCOUNT);
+	if (rc)
+		goto out_put_ioas;
+
+	/* The calling driver is a user until iommufd_access_destroy() */
+	refcount_inc(&access->obj.users);
+	access->ictx = ictx;
+	access->data = data;
+	access->pub.iopt = &access->ioas->iopt;
+	iommufd_ctx_get(ictx);
+	iommufd_object_finalize(ictx, &access->obj);
+	return &access->pub;
+out_put_ioas:
+	refcount_dec(&access->ioas->obj.users);
+out_abort:
+	iommufd_object_abort(ictx, &access->obj);
+	return ERR_PTR(rc);
+}
+EXPORT_SYMBOL_GPL(iommufd_access_create);
+
+void iommufd_access_destroy(struct iommufd_access *access_pub)
+{
+	struct iommufd_access_priv *access =
+		container_of(access_pub, struct iommufd_access_priv, pub);
+	bool was_destroyed;
+
+	was_destroyed = iommufd_object_destroy_user(access->ictx, &access->obj);
+	WARN_ON(!was_destroyed);
+}
+EXPORT_SYMBOL_GPL(iommufd_access_destroy);
+
+/**
+ * iommufd_access_notify_unmap - Notify users of an iopt to stop using it
+ * @iopt - iopt to work on
+ * @iova - Starting iova in the iopt
+ * @length - Number of bytes
+ *
+ * After this function returns there should be no users attached to the pages
+ * linked to this iopt that intersect with iova,length. Anyone that has attached
+ * a user through iopt_access_pages() needs to detatch it through
+ * iommufd_access_unpin_pages() before this function returns.
+ *
+ * The unmap callback may not call or wait for a iommufd_access_destroy() to
+ * complete. Once iommufd_access_destroy() returns no ops are running and no
+ * future ops will be called.
+ */
+void iommufd_access_notify_unmap(struct io_pagetable *iopt, unsigned long iova,
+				 unsigned long length)
+{
+	struct iommufd_ioas *ioas =
+		container_of(iopt, struct iommufd_ioas, iopt);
+	struct iommufd_access_priv *access;
+	unsigned long index;
+
+	xa_lock(&ioas->access_list);
+	xa_for_each(&ioas->access_list, index, access) {
+		if (!iommufd_lock_obj(&access->obj))
+			continue;
+		xa_unlock(&ioas->access_list);
+
+		access->ops->unmap(access->data, iova, length);
+
+		iommufd_put_object(&access->obj);
+		xa_lock(&ioas->access_list);
+	}
+	xa_unlock(&ioas->access_list);
+}
+
+int iommufd_access_rw(struct iommufd_access *access, unsigned long iova,
+		      void *data, size_t len, bool write)
+{
+	/* FIXME implement me */
+	return -EINVAL;
+}
+EXPORT_SYMBOL_GPL(iommufd_access_rw);
