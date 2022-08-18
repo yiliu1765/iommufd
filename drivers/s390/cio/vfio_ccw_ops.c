@@ -99,8 +99,10 @@ static int vfio_ccw_mdev_probe(struct mdev_device *mdev)
 		return -EPERM;
 
 	memset(&private->vdev, 0, sizeof(private->vdev));
-	vfio_init_group_dev(&private->vdev, &mdev->dev,
-			    &vfio_ccw_dev_ops);
+	ret= vfio_init_group_dev(&private->vdev, &mdev->dev,
+				 &vfio_ccw_dev_ops);
+	if (ret)
+		goto err_atomic;
 
 	VFIO_CCW_MSG_EVENT(2, "sch %x.%x.%04x: create\n",
 			   private->sch->schid.cssid,
@@ -109,12 +111,13 @@ static int vfio_ccw_mdev_probe(struct mdev_device *mdev)
 
 	ret = vfio_register_emulated_iommu_dev(&private->vdev);
 	if (ret)
-		goto err_atomic;
+		goto err_uninit;
 	dev_set_drvdata(&mdev->dev, private);
 	return 0;
 
-err_atomic:
+err_uninit:
 	vfio_uninit_group_dev(&private->vdev);
+err_atomic:
 	atomic_inc(&private->avail);
 	return ret;
 }

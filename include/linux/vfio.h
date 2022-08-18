@@ -45,7 +45,8 @@ struct vfio_device {
 	struct kvm *kvm;
 
 	/* Members below here are private, not for driver use */
-	struct kref kref; /* object life circle */
+	int index;
+	struct device device; /* device.kref covers object life circle */
 	refcount_t refcount; /* user count */
 	unsigned int open_count;
 	struct completion comp;
@@ -151,8 +152,8 @@ struct vfio_device *_vfio_alloc_device(size_t size, struct device *dev,
 		     struct dev_struct, member)
 
 void vfio_put_device(struct vfio_device *device);
-void vfio_init_group_dev(struct vfio_device *device, struct device *dev,
-			 const struct vfio_device_ops *ops);
+int vfio_init_group_dev(struct vfio_device *device, struct device *dev,
+			const struct vfio_device_ops *ops);
 void vfio_uninit_group_dev(struct vfio_device *device);
 int vfio_register_group_dev(struct vfio_device *device);
 int vfio_register_emulated_iommu_dev(struct vfio_device *device);
