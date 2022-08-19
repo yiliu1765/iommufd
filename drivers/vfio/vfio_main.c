@@ -928,12 +928,13 @@ static const struct file_operations vfio_fops = {
 /*
  * VFIO Group fd, /dev/vfio/$GROUP
  */
-static void __vfio_group_unset_container(struct vfio_group *group)
+static void vfio_container_detatch_group(struct vfio_group *group)
 {
 	struct vfio_container *container = group->container;
 	struct vfio_iommu_driver *driver;
 
 	lockdep_assert_held_write(&group->group_rwsem);
+	WARN_ON(group->container_users != 1);
 
 	down_write(&container->group_lock);
 
@@ -976,7 +977,7 @@ static int vfio_group_ioctl_unset_container(struct vfio_group *group)
 		return -EINVAL;
 	if (group->container_users != 1)
 		return -EBUSY;
-	__vfio_group_unset_container(group);
+	vfio_container_detatch_group(group);
 	return 0;
 }
 
@@ -1329,10 +1330,8 @@ static int vfio_group_fops_release(struct inode *inode, struct file *filep)
 	 * is only called when there are no open devices.
 	 */
 	WARN_ON(group->notifier.head);
-	if (group->container) {
-		WARN_ON(group->container_users != 1);
-		__vfio_group_unset_container(group);
-	}
+	if (group->container)
+		vfio_container_detatch_group(group);
 	group->opened_file = NULL;
 	up_write(&group->group_rwsem);
 
