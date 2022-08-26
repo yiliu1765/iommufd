@@ -610,7 +610,7 @@ static int vfio_device_first_open(struct vfio_device *device)
 	 * it during close_device.
 	 */
 	down_read(&device->group->group_rwsem);
-	ret = vfio_device_assign_container(device);
+	ret = vfio_container_use(device->group);
 	if (ret)
 		goto err_module_put;
 
@@ -625,7 +625,7 @@ static int vfio_device_first_open(struct vfio_device *device)
 	return 0;
 
 err_container:
-	vfio_device_unassign_container(device);
+	vfio_container_unuse(device->group);
 err_module_put:
 	device->kvm = NULL;
 	up_read(&device->group->group_rwsem);
@@ -642,7 +642,7 @@ static void vfio_device_last_close(struct vfio_device *device)
 	if (device->ops->close_device)
 		device->ops->close_device(device);
 	device->kvm = NULL;
-	vfio_device_unassign_container(device);
+	vfio_container_unuse(device->group);
 	up_read(&device->group->group_rwsem);
 	module_put(device->dev->driver->owner);
 }
