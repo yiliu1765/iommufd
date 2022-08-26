@@ -531,11 +531,11 @@ int vfio_device_assign_container(struct vfio_device *device)
 
 void vfio_device_unassign_container(struct vfio_device *device)
 {
-	down_write(&device->group->group_rwsem);
+	lockdep_assert_held_write(&device->group->group_rwsem);
+
 	WARN_ON(device->group->container_users <= 1);
 	device->group->container_users--;
 	fput(device->group->opened_file);
-	up_write(&device->group->group_rwsem);
 }
 
 /*
