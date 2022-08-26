@@ -717,16 +717,22 @@ static int vfio_device_first_open(struct vfio_device *device)
 	 * it during close_device.
 	 */
 	mutex_lock(&device->group->group_lock);
+	ret = vfio_device_assign_container(device);
+	if (ret)
+		goto err_module_put;
+
 	device->kvm = device->group->kvm;
 	if (device->ops->open_device) {
 		ret = device->ops->open_device(device);
 		if (ret)
-			goto err_module_put;
+			goto err_container;
 	}
 	vfio_device_container_register(device);
 	mutex_unlock(&device->group->group_lock);
 	return 0;
 
+err_container:
+	vfio_device_unassign_container(device);
 err_module_put:
 	device->kvm = NULL;
 	mutex_unlock(&device->group->group_lock);
@@ -743,6 +749,7 @@ static void vfio_device_last_close(struct vfio_device *device)
 	if (device->ops->close_device)
 		device->ops->close_device(device);
 	device->kvm = NULL;
+	vfio_device_unassign_container(device);
 	mutex_unlock(&device->group->group_lock);
 	module_put(device->dev->driver->owner);
 }
@@ -751,12 +758,6 @@ static struct file *vfio_device_open(struct vfio_device *device)
 {
 	struct file *filep;
 	int ret;
-
-	mutex_lock(&device->group->group_lock);
-	ret = vfio_device_assign_container(device);
-	mutex_unlock(&device->group->group_lock);
-	if (ret)
-		return ERR_PTR(ret);
 
 	mutex_lock(&device->dev_set->lock);
 	device->open_count++;
@@ -801,7 +802,6 @@ err_close_device:
 err_unassign_container:
 	device->open_count--;
 	mutex_unlock(&device->dev_set->lock);
-	vfio_device_unassign_container(device);
 	return ERR_PTR(ret);
 }
 
@@ -1004,8 +1004,6 @@ static int vfio_device_fops_release(struct inode *inode, struct file *filep)
 		vfio_device_last_close(device);
 	device->open_count--;
 	mutex_unlock(&device->dev_set->lock);
-
-	vfio_device_unassign_container(device);
 
 	vfio_device_put_registration(device);
 
