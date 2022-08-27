@@ -103,7 +103,7 @@ found_get_ref:
 }
 EXPORT_SYMBOL_GPL(vfio_assign_device_set);
 
-static void vfio_release_device_set(struct vfio_device *device)
+void vfio_release_device_set(struct vfio_device *device)
 {
 	struct vfio_device_set *dev_set = device->dev_set;
 
@@ -123,6 +123,7 @@ static void vfio_release_device_set(struct vfio_device *device)
 	}
 	xa_unlock(&vfio_device_set_xa);
 }
+EXPORT_SYMBOL_GPL(vfio_release_device_set);
 
 static void vfio_group_get(struct vfio_group *group);
 
