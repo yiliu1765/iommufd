@@ -347,7 +347,28 @@ struct iommu_vfio_ioas {
 
 /**
  * enum iommu_device_data_type - IOMMU hardware Data types
+ * @IOMMU_DEVICE_DATA_INTEL_VTD: Intel VT-d iommu data type
  */
 enum iommu_device_data_type {
+	IOMMU_DEVICE_DATA_INTEL_VTD = 1,
+};
+
+/**
+ * struct iommu_device_info_vtd - Intel VT-d device info
+ *
+ * @flags: Must be set to 0
+ * @__reserved: Must be 0
+ * @cap_reg: Value of Intel VT-d capability register defined in chapter
+ *	     11.4.2 of Intel VT-d spec.
+ * @ecap_reg: Value of Intel VT-d capability register defined in chapter
+ *	     11.4.3 of Intel VT-d spec.
+ *
+ * Intel hardware iommu capability.
+ */
+struct iommu_device_info_vtd {
+	__u32 flags;
+	__u32 __reserved;
+	__aligned_u64 cap_reg;
+	__aligned_u64 ecap_reg;
 };
 #endif
