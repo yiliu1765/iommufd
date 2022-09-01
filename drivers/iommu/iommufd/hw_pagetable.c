@@ -15,6 +15,7 @@ void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 
 	iommu_domain_free(hwpt->domain);
 	refcount_dec(&hwpt->ioas->obj.users);
+	list_del(&hwpt->hwpt_item);
 	mutex_destroy(&hwpt->devices_lock);
 }
 
@@ -56,6 +57,7 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 
 	INIT_LIST_HEAD(&hwpt->devices);
 	INIT_LIST_HEAD(&hwpt->hwpt_item);
+	list_add_tail(&hwpt->hwpt_item, &ioas->hwpt_list);
 	mutex_init(&hwpt->devices_lock);
 	/* Pairs with iommufd_hw_pagetable_destroy() */
 	refcount_inc(&ioas->obj.users);
