@@ -1422,10 +1422,10 @@ bool vfio_file_enforced_coherent(struct file *file)
 		mutex_lock(&group->device_lock);
 		ret = true;
 		list_for_each_entry(device, &group->device_list, group_next) {
-			if (!vfio_device_try_get(device))
+			if (!vfio_device_try_get_registration(device))
 				continue;
 			ret &= vfio_iommufd_enforced_coherent(device);
-			vfio_device_put(device);
+			vfio_device_put_registration(device);
 		}
 		mutex_unlock(&group->device_lock);
 	} else {
