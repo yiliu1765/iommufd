@@ -821,6 +821,7 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
 		return -EINVAL;
 	}
 
+#if 0
 	/*
 	 * First level PGD is in GPA, must be supported by the second level.
 	 * Revisit: Is this sufficient?
@@ -831,6 +832,7 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
 				    (uintptr_t)s1_gpgd, s2_domain->max_addr);
 		return -EINVAL;
 	}
+#endif
 	pasid_set_flptr(pte, (uintptr_t)s1_gpgd);
 
 	if (s1_cfg->flags & IOMMU_VTD_PGTBL_SRE) {
