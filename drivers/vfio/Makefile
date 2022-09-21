@@ -2,7 +2,7 @@
 vfio_virqfd-y := virqfd.o
 
 vfio-$(CONFIG_VFIO_CONTAINER) += container.o
-vfio-y += group.o
+vfio-$(CONFIG_VFIO_GROUP) += group.o
 vfio-y += vfio_main.o
 vfio-$(CONFIG_IOMMUFD) += vfio_iommufd.o
 
