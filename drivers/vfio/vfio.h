@@ -67,6 +67,7 @@ bool vfio_device_try_get_registration(struct vfio_device *device);
 int vfio_device_open(struct vfio_device *device);
 void vfio_device_last_close(struct vfio_device *device);
 
+#if IS_ENABLED(CONFIG_VFIO_GROUP)
 struct vfio_group *vfio_noiommu_group_alloc(struct device *dev,
 					    enum vfio_group_type type);
 struct vfio_group *vfio_group_find_or_alloc(struct device *dev);
@@ -90,6 +91,106 @@ bool vfio_group_has_dev(struct vfio_group *group, struct vfio_device *device);
 bool vfio_group_has_container(struct vfio_group *group);
 int __init vfio_group_init(void);
 void vfio_group_cleanup(void);
+#else
+static inline struct vfio_group *
+vfio_noiommu_group_alloc(struct device *dev, enum vfio_group_type type)
+{
+	return NULL;
+}
+
+static inline struct vfio_group *vfio_group_find_or_alloc(struct device *dev)
+{
+	return NULL;
+}
+
+static inline void vfio_device_put_group(struct vfio_device *device)
+{
+}
+
+static inline void vfio_group_register_device(struct vfio_device *device)
+{
+}
+
+static inline void vfio_group_unregister_device(struct vfio_device *device)
+{
+}
+
+static inline bool vfio_group_find_device(struct vfio_group *group,
+					  struct vfio_device *device)
+{
+	return false;
+}
+
+static inline bool vfio_group_opened(struct vfio_group *group)
+{
+	return false;
+}
+
+static inline void vfio_group_down_write(struct vfio_group *group)
+{
+}
+
+static inline void vfio_group_up_write(struct vfio_group *group)
+{
+}
+
+static inline bool vfio_group_device_cdev_opened(struct vfio_group *group)
+{
+	return false;
+}
+
+static inline void vfio_group_inc_device_cdev_cnt(struct vfio_group *group)
+{
+}
+
+static inline void vfio_group_dec_device_cdev_cnt(struct vfio_group *group)
+{
+}
+
+static inline int vfio_group_open_device(struct vfio_device *device)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void vfio_group_close_device(struct vfio_device *device)
+{
+}
+
+static inline bool vfio_is_group_file(struct file *file)
+{
+	return false;
+}
+
+static inline bool vfio_group_enforced_coherent(struct vfio_group *group)
+{
+	return true;
+}
+
+static inline void vfio_group_set_kvm(struct vfio_group *group,
+				      struct kvm *kvm)
+{
+}
+
+static inline bool vfio_group_has_dev(struct vfio_group *group,
+				      struct vfio_device *device)
+{
+	return false;
+}
+
+static inline bool vfio_group_has_container(struct vfio_group *group)
+{
+	return false;
+}
+
+static inline int __init vfio_group_init(void)
+{
+	return 0;
+}
+
+static inline void vfio_group_cleanup(void)
+{
+}
+#endif /* CONFIG_VFIO_GROUP */
 
 #if IS_ENABLED(CONFIG_VFIO_CONTAINER)
 /* events for the backend driver notify callback */
