@@ -494,6 +494,21 @@ struct iommu_hw_info_vtd {
 };
 
 /**
+ * struct iommu_hw_info_smmuv3 - ARM SMMUv3 device info
+ *                               (IOMMU_HW_INFO_TYPE_ARM_SMMUV3)
+ *
+ * @flags: Must be set to 0
+ * @__reserved: Must be 0
+ * @idr: Implemented features for the SMMU Non-secure programming interface.
+ *       Please refer to the chapters from 6.3.1 to 6.3.6 in the SMMUv3 Spec.
+ */
+struct iommu_hw_info_smmuv3 {
+	__u32 flags;
+	__u32 __reserved;
+	__u32 idr[6];
+};
+
+/**
  * enum iommu_hw_info_type - IOMMU Hardware Info Types
  * @IOMMU_HW_INFO_TYPE_INTEL_VTD: Intel VT-d iommu info type
  * @IOMMU_HW_INFO_TYPE_ARM_SMMUV3: ARM SMMUv3 iommu info type
