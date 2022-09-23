@@ -1486,22 +1486,14 @@ struct iommu_group *vfio_file_iommu_group(struct file *file)
 }
 EXPORT_SYMBOL_GPL(vfio_file_iommu_group);
 
-/**
- * vfio_file_enforced_coherent - True if the DMA associated with the VFIO file
- *        is always CPU cache coherent
- * @file: VFIO group file
- *
- * Enforced coherency means that the IOMMU ignores things like the PCIe no-snoop
- * bit in DMA transactions. A return of false indicates that the user has
- * rights to access additional instructions such as wbinvd on x86.
- */
-bool vfio_file_enforced_coherent(struct file *file)
+static bool vfio_is_group_file(struct file *file)
 {
-	struct vfio_group *group = file->private_data;
-	bool ret;
+	return file->f_op == &vfio_group_fops;
+}
 
-	if (file->f_op != &vfio_group_fops)
-		return true;
+static bool vfio_group_enforced_coherent(struct vfio_group *group)
+{
+	bool ret;
 
 	down_read(&group->group_rwsem);
 	if (group->container) {
@@ -1530,7 +1522,33 @@ bool vfio_file_enforced_coherent(struct file *file)
 	up_read(&group->group_rwsem);
 	return ret;
 }
+
+/**
+ * vfio_file_enforced_coherent - True if the DMA associated with the VFIO file
+ *        is always CPU cache coherent
+ * @file: VFIO group file
+ *
+ * Enforced coherency means that the IOMMU ignores things like the PCIe no-snoop
+ * bit in DMA transactions. A return of false indicates that the user has
+ * rights to access additional instructions such as wbinvd on x86.
+ */
+bool vfio_file_enforced_coherent(struct file *file)
+{
+	struct vfio_group *group = file->private_data;
+
+	if (!vfio_is_group_file(file))
+		return true;
+
+	return vfio_group_enforced_coherent(group);
+}
 EXPORT_SYMBOL_GPL(vfio_file_enforced_coherent);
+
+static void vfio_group_set_kvm(struct vfio_group *group, struct kvm *kvm)
+{
+	down_write(&group->group_rwsem);
+	group->kvm = kvm;
+	up_write(&group->group_rwsem);
+}
 
 /**
  * vfio_file_set_kvm - Link a kvm with VFIO drivers
@@ -1544,14 +1562,18 @@ void vfio_file_set_kvm(struct file *file, struct kvm *kvm)
 {
 	struct vfio_group *group = file->private_data;
 
-	if (file->f_op != &vfio_group_fops)
+	if (!vfio_is_group_file(file))
 		return;
 
-	down_write(&group->group_rwsem);
-	group->kvm = kvm;
-	up_write(&group->group_rwsem);
+	vfio_group_set_kvm(group, kvm);
 }
 EXPORT_SYMBOL_GPL(vfio_file_set_kvm);
+
+static bool vfio_group_has_dev(struct vfio_group *group,
+			       struct vfio_device *device)
+{
+	return group == device->group;
+}
 
 /**
  * vfio_file_has_dev - True if the VFIO file is a handle for device
@@ -1564,10 +1586,10 @@ bool vfio_file_has_dev(struct file *file, struct vfio_device *device)
 {
 	struct vfio_group *group = file->private_data;
 
-	if (file->f_op != &vfio_group_fops)
+	if (!vfio_is_group_file(file))
 		return false;
 
-	return group == device->group;
+	return vfio_group_has_dev(group, device);
 }
 EXPORT_SYMBOL_GPL(vfio_file_has_dev);
 
@@ -1690,6 +1712,11 @@ int vfio_set_irqs_validate_and_prepare(struct vfio_irq_set *hdr, int num_irqs,
 }
 EXPORT_SYMBOL(vfio_set_irqs_validate_and_prepare);
 
+static bool vfio_group_has_container(struct vfio_group *group)
+{
+	return group->container;
+}
+
 /*
  * Pin contiguous user pages and return their associated host pages for local
  * domain only.
@@ -1709,7 +1736,7 @@ int vfio_pin_pages(struct vfio_device *device, dma_addr_t iova,
 {
 	if (!pages || !npage || !vfio_assert_device_open(device))
 		return -EINVAL;
-	if (device->group->container)
+	if (vfio_group_has_container(device->group))
 		return vfio_container_pin_pages(device, iova, npage, prot, pages);
 	if (device->iommufd_access) {
 		if (iova > ULONG_MAX)
@@ -1734,7 +1761,7 @@ void vfio_unpin_pages(struct vfio_device *device, dma_addr_t iova, int npage)
 	if (WARN_ON(!vfio_assert_device_open(device)))
 		return;
 
-	if (device->group->container) {
+	if (vfio_group_has_container(device->group)) {
 		vfio_container_unpin_pages(device, iova, npage);
 	} else if (device->iommufd_access) {
 		if (WARN_ON(iova > ULONG_MAX))
@@ -1768,7 +1795,7 @@ int vfio_dma_rw(struct vfio_device *device, dma_addr_t iova, void *data,
 	if (!data || len <= 0 || !vfio_assert_device_open(device))
 		return -EINVAL;
 
-	if (device->group->container)
+	if (vfio_group_has_container(device->group))
 		return vfio_container_dma_rw(device, iova, data, len, write);
 
 	if (device->iommufd_access) {
