@@ -878,8 +878,8 @@ err_close_device:
 	mutex_lock(&device->dev_set->lock);
 	if (device->open_count == 1)
 		vfio_device_last_close(device);
-	device->open_count--;
 err_unassign_container:
+	device->open_count--;
 	mutex_unlock(&device->dev_set->lock);
 	return ERR_PTR(ret);
 }
