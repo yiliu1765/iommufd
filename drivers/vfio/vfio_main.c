@@ -501,6 +501,20 @@ static struct vfio_group *vfio_group_find_or_alloc(struct device *dev)
 	return group;
 }
 
+static void vfio_device_register_group(struct vfio_device *device)
+{
+	mutex_lock(&device->group->device_lock);
+	list_add(&device->group_next, &device->group->device_list);
+	mutex_unlock(&device->group->device_lock);
+}
+
+static void vfio_device_unregister_group(struct vfio_device *device)
+{
+	mutex_lock(&device->group->device_lock);
+	list_del(&device->group_next);
+	mutex_unlock(&device->group->device_lock);
+}
+
 static int __vfio_register_dev(struct vfio_device *device,
 		struct vfio_group *group)
 {
@@ -534,9 +548,7 @@ static int __vfio_register_dev(struct vfio_device *device,
 	/* Refcounting can't start until the driver calls register */
 	refcount_set(&device->refcount, 1);
 
-	mutex_lock(&group->device_lock);
-	list_add(&device->group_next, &group->device_list);
-	mutex_unlock(&group->device_lock);
+	vfio_device_register_group(device);
 
 	return 0;
 err_out:
@@ -596,7 +608,6 @@ static struct vfio_device *vfio_device_get_from_name(struct vfio_group *group,
  * removed.  Open file descriptors for the device... */
 void vfio_unregister_group_dev(struct vfio_device *device)
 {
-	struct vfio_group *group = device->group;
 	unsigned int i = 0;
 	bool interrupted = false;
 	long rc;
@@ -624,9 +635,7 @@ void vfio_unregister_group_dev(struct vfio_device *device)
 		}
 	}
 
-	mutex_lock(&group->device_lock);
-	list_del(&device->group_next);
-	mutex_unlock(&group->device_lock);
+	vfio_device_unregister_group(device);
 
 	/* Balances device_add in register path */
 	device_del(&device->device);
