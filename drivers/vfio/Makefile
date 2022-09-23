@@ -4,7 +4,8 @@ vfio_virqfd-y := virqfd.o
 obj-$(CONFIG_VFIO) += vfio.o
 
 vfio-y += vfio_main.o \
-	  iova_bitmap.o
+	  iova_bitmap.o \
+	  group.o
 
 vfio-$(CONFIG_VFIO_CONTAINER) += container.o
 vfio-$(CONFIG_IOMMUFD) += vfio_iommufd.o

@@ -60,6 +60,30 @@ struct vfio_group {
 	struct iommufd_ctx		*iommufd;
 };
 
+extern const struct file_operations vfio_device_fops;
+void vfio_device_put_registration(struct vfio_device *device);
+bool vfio_device_try_get_registration(struct vfio_device *device);
+int vfio_device_open(struct vfio_device *device);
+void vfio_device_last_close(struct vfio_device *device);
+
+struct vfio_group *vfio_noiommu_group_alloc(struct device *dev,
+					    enum vfio_group_type type);
+struct vfio_group *vfio_group_find_or_alloc(struct device *dev);
+void vfio_device_put_group(struct vfio_device *device);
+void vfio_group_register_device(struct vfio_device *device);
+void vfio_group_unregister_device(struct vfio_device *device);
+bool vfio_group_find_device(struct vfio_group *group,
+			    struct vfio_device *device);
+int vfio_group_open_device(struct vfio_device *device);
+void vfio_group_close_device(struct vfio_device *device);
+bool vfio_is_group_file(struct file *file);
+bool vfio_group_enforced_coherent(struct vfio_group *group);
+void vfio_group_set_kvm(struct vfio_group *group, struct kvm *kvm);
+bool vfio_group_has_dev(struct vfio_group *group, struct vfio_device *device);
+bool vfio_group_has_container(struct vfio_group *group);
+int __init vfio_group_init(void);
+void vfio_group_cleanup(void);
+
 #if IS_ENABLED(CONFIG_VFIO_CONTAINER)
 /* events for the backend driver notify callback */
 enum vfio_iommu_notify_type {
