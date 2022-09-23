@@ -766,14 +766,11 @@ static bool vfio_assert_device_open(struct vfio_device *device)
 	return !WARN_ON_ONCE(!READ_ONCE(device->open_count));
 }
 
-static int vfio_device_first_open(struct vfio_device *device)
+static int vfio_group_open_device(struct vfio_device *device)
 {
 	int ret;
 
 	lockdep_assert_held(&device->dev_set->lock);
-
-	if (!try_module_get(device->dev->driver->owner))
-		return -ENODEV;
 
 	/*
 	 * Here we pass the KVM pointer with the group under the read lock.  If
@@ -783,17 +780,17 @@ static int vfio_device_first_open(struct vfio_device *device)
 	down_write(&device->group->group_rwsem);
 	if (!vfio_group_has_iommu(device->group)) {
 		ret = -EINVAL;
-		goto err_module_put;
+		goto err_unlock;
 	}
 
 	if (device->group->container) {
 		ret = vfio_container_use(device->group);
 		if (ret)
-			goto err_module_put;
+			goto err_unlock;
 	} else if (device->group->iommufd) {
 		ret = vfio_iommufd_bind(device, device->group->iommufd);
 		if (ret)
-			goto err_module_put;
+			goto err_unlock;
 	}
 
 	device->kvm = device->group->kvm;
@@ -812,13 +809,26 @@ err_container:
 		vfio_container_unuse(device->group);
 	vfio_iommufd_unbind(device);
 	device->kvm = NULL;
-err_module_put:
+err_unlock:
 	up_write(&device->group->group_rwsem);
-	module_put(device->dev->driver->owner);
 	return ret;
 }
 
-static void vfio_device_last_close(struct vfio_device *device)
+static int vfio_device_first_open(struct vfio_device *device)
+{
+	int ret;
+
+	lockdep_assert_held(&device->dev_set->lock);
+
+	if (!try_module_get(device->dev->driver->owner))
+		return -ENODEV;
+	ret = vfio_group_open_device(device);
+	if (ret)
+		module_put(device->dev->driver->owner);
+	return ret;
+}
+
+static void vfio_group_close_device(struct vfio_device *device)
 {
 	lockdep_assert_held(&device->dev_set->lock);
 
@@ -827,27 +837,39 @@ static void vfio_device_last_close(struct vfio_device *device)
 		vfio_device_container_unregister(device);
 	if (device->ops->close_device)
 		device->ops->close_device(device);
-	device->kvm = NULL;
 	if (device->group->container)
 		vfio_container_unuse(device->group);
-	vfio_iommufd_unbind(device);
 	up_write(&device->group->group_rwsem);
+}
+
+static void vfio_device_last_close(struct vfio_device *device)
+{
+	lockdep_assert_held(&device->dev_set->lock);
+
+	vfio_group_close_device(device);
+	device->kvm = NULL;
+	vfio_iommufd_unbind(device);
 	module_put(device->dev->driver->owner);
 }
 
-static struct file *vfio_device_open(struct vfio_device *device)
+static int vfio_device_open(struct vfio_device *device)
 {
-	struct file *filep;
-	int ret;
+	int ret = 0;
 
 	mutex_lock(&device->dev_set->lock);
 	device->open_count++;
 	if (device->open_count == 1) {
 		ret = vfio_device_first_open(device);
 		if (ret)
-			goto err_unassign_container;
+			device->open_count--;
 	}
 	mutex_unlock(&device->dev_set->lock);
+	return ret;
+}
+
+static struct file *vfio_group_get_device_file(struct vfio_device *device)
+{
+	struct file *filep;
 
 	/*
 	 * We can't use anon_inode_getfd() because we need to modify
@@ -855,10 +877,8 @@ static struct file *vfio_device_open(struct vfio_device *device)
 	 */
 	filep = anon_inode_getfile("[vfio-device]", &vfio_device_fops,
 				   device, O_RDWR);
-	if (IS_ERR(filep)) {
-		ret = PTR_ERR(filep);
-		goto err_close_device;
-	}
+	if (IS_ERR(filep))
+		goto out;
 
 	/*
 	 * TODO: add an anon_inode interface to do this.
@@ -874,16 +894,8 @@ static struct file *vfio_device_open(struct vfio_device *device)
 	 * On success the ref of device is moved to the file and
 	 * put in vfio_device_fops_release()
 	 */
+out:
 	return filep;
-
-err_close_device:
-	mutex_lock(&device->dev_set->lock);
-	if (device->open_count == 1)
-		vfio_device_last_close(device);
-err_unassign_container:
-	device->open_count--;
-	mutex_unlock(&device->dev_set->lock);
-	return ERR_PTR(ret);
 }
 
 static int vfio_group_ioctl_get_device_fd(struct vfio_group *group,
@@ -910,15 +922,25 @@ static int vfio_group_ioctl_get_device_fd(struct vfio_group *group,
 		goto err_put_device;
 	}
 
-	filep = vfio_device_open(device);
+	ret = vfio_device_open(device);
+	if (ret)
+		goto err_put_fdno;
+
+	filep = vfio_group_get_device_file(device);
 	if (IS_ERR(filep)) {
 		ret = PTR_ERR(filep);
-		goto err_put_fdno;
+		goto err_close_device;
 	}
 
 	fd_install(fdno, filep);
 	return fdno;
 
+err_close_device:
+	mutex_lock(&device->dev_set->lock);
+	if (device->open_count == 1)
+		vfio_device_last_close(device);
+	device->open_count--;
+	mutex_unlock(&device->dev_set->lock);
 err_put_fdno:
 	put_unused_fd(fdno);
 err_put_device:
