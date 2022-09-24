@@ -44,6 +44,8 @@
 
 static struct vfio {
 	struct class			*device_class;
+	struct list_head		device_list;
+	struct mutex			device_lock; /* locks device_list */
 	struct ida			device_ida;
 } vfio;
 
@@ -246,6 +248,24 @@ void vfio_free_device(struct vfio_device *device)
 }
 EXPORT_SYMBOL_GPL(vfio_free_device);
 
+static bool vfio_find_device_for_dev(struct device *dev)
+{
+	struct vfio_device *device;
+
+	mutex_lock(&vfio.device_lock);
+	list_for_each_entry(device, &vfio.device_list, vfio_next) {
+		if (device->dev == dev &&
+		    vfio_device_try_get_registration(device)) {
+			vfio_device_put_registration(device);
+			mutex_unlock(&vfio.device_lock);
+			dev_WARN(device->dev, "Device already exists\n");
+			return true;
+		}
+	}
+	mutex_unlock(&vfio.device_lock);
+	return false;
+}
+
 static int __vfio_register_dev(struct vfio_device *device,
 		struct vfio_group *group)
 {
@@ -266,7 +286,8 @@ static int __vfio_register_dev(struct vfio_device *device,
 	if (!device->dev_set)
 		vfio_assign_device_set(device, device);
 
-	if (vfio_group_find_device(group, device)) {
+	if (vfio_group_find_device(group, device) ||
+	    vfio_find_device_for_dev(device->dev)) {
 		ret = -EBUSY;
 		goto err_out;
 	}
@@ -284,6 +305,10 @@ static int __vfio_register_dev(struct vfio_device *device,
 
 	/* Refcounting can't start until the driver calls register */
 	refcount_set(&device->refcount, 1);
+
+	mutex_lock(&vfio.device_lock);
+	list_add(&device->vfio_next, &vfio.device_list);
+	mutex_unlock(&vfio.device_lock);
 
 	vfio_group_register_device(device);
 
@@ -344,6 +369,10 @@ void vfio_unregister_group_dev(struct vfio_device *device)
 	}
 
 	vfio_group_unregister_device(device);
+
+	mutex_lock(&vfio.device_lock);
+	list_del(&device->vfio_next);
+	mutex_unlock(&vfio.device_lock);
 
 	/* Balances device_add in register path */
 	device_del(&device->device);
@@ -1250,6 +1279,8 @@ static int __init vfio_init(void)
 	int ret;
 
 	ida_init(&vfio.device_ida);
+	mutex_init(&vfio.device_lock);
+	INIT_LIST_HEAD(&vfio.device_list);
 
 	ret = vfio_container_init();
 	if (ret)
@@ -1278,6 +1309,7 @@ err_group_init:
 
 static void __exit vfio_cleanup(void)
 {
+	WARN_ON(!list_empty(&vfio.device_list));
 	ida_destroy(&vfio.device_ida);
 	class_destroy(vfio.device_class);
 	vfio.device_class = NULL;
