@@ -215,6 +215,7 @@ int vfio_mig_get_next_state(struct vfio_device *device,
 /*
  * External user API
  */
+bool vfio_file_valid(struct file *file);
 #if IS_ENABLED(CONFIG_VFIO_GROUP)
 struct iommu_group *vfio_file_iommu_group(struct file *file);
 #else

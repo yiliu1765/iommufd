@@ -1084,10 +1084,57 @@ const struct file_operations vfio_device_fops = {
 	.mmap		= vfio_device_fops_mmap,
 };
 
+static bool vfio_is_device_cdev_file(struct file *file)
+{
+	struct vfio_device *device;
+
+	if (file->f_op != &vfio_device_fops)
+		return false;
+
+	device = vfio_device_get_from_cdev(file);
+	if (IS_ERR(device))
+		return false;
+
+	if (!vfio_device_try_get_registration(device))
+		return false;
+
+	vfio_device_put_registration(device);
+
+	return true;
+}
+
+/**
+ * vfio_file_valid - True if the input file is group file or device file
+ *		     opened by vfio device cdev
+ * @file: VFIO group or device file
+ */
+bool vfio_file_valid(struct file *file)
+{
+	return vfio_is_group_file(file) ||
+	       vfio_is_device_cdev_file(file);
+}
+EXPORT_SYMBOL_GPL(vfio_file_valid);
+
+static bool vfio_device_file_enforced_coherent(struct file *file)
+{
+	struct vfio_device *device;
+	bool ret = true;
+
+	device = vfio_device_get_from_cdev(file);
+	if (IS_ERR(device))
+		return ret;;
+
+	if (vfio_device_try_get_registration(device)) {
+		ret &= vfio_iommufd_enforced_coherent(device);
+		vfio_device_put_registration(device);
+	}
+	return ret;
+}
+
 /**
  * vfio_file_enforced_coherent - True if the DMA associated with the VFIO file
  *        is always CPU cache coherent
- * @file: VFIO group file
+ * @file: VFIO group or device file
  *
  * Enforced coherency means that the IOMMU ignores things like the PCIe no-snoop
  * bit in DMA transactions. A return of false indicates that the user has
@@ -1095,18 +1142,35 @@ const struct file_operations vfio_device_fops = {
  */
 bool vfio_file_enforced_coherent(struct file *file)
 {
-	struct vfio_group *group = file->private_data;
+	if (vfio_is_group_file(file)) {
+		struct vfio_group *group = file->private_data;
 
-	if (!vfio_is_group_file(file))
+		return vfio_group_enforced_coherent(group);
+	} else if (file->f_op == &vfio_device_fops) {
+		return vfio_device_file_enforced_coherent(file);
+	} else {
 		return true;
+	}
 
-	return vfio_group_enforced_coherent(group);
 }
 EXPORT_SYMBOL_GPL(vfio_file_enforced_coherent);
 
+static void vfio_device_file_set_kvm(struct file *file, struct kvm *kvm)
+{
+	struct vfio_device *device;
+
+	device = vfio_device_get_from_cdev(file);
+	if (IS_ERR(device))
+		return;
+
+	mutex_lock(&device->dev_set->lock);
+	device->kvm = kvm;
+	mutex_unlock(&device->dev_set->lock);
+}
+
 /**
  * vfio_file_set_kvm - Link a kvm with VFIO drivers
- * @file: VFIO group file
+ * @file: VFIO group or device file
  * @kvm: KVM to link
  *
  * When a VFIO device is first opened the KVM will be available in
@@ -1114,14 +1178,28 @@ EXPORT_SYMBOL_GPL(vfio_file_enforced_coherent);
  */
 void vfio_file_set_kvm(struct file *file, struct kvm *kvm)
 {
-	struct vfio_group *group = file->private_data;
+	if (vfio_is_group_file(file)) {
+		struct vfio_group *group = file->private_data;
 
-	if (!vfio_is_group_file(file))
-		return;
+		vfio_group_set_kvm(group, kvm);
+	} else if (file->f_op == &vfio_device_fops) {
+		vfio_device_file_set_kvm(file, kvm);
+	}
 
-	vfio_group_set_kvm(group, kvm);
 }
 EXPORT_SYMBOL_GPL(vfio_file_set_kvm);
+
+static bool vfio_device_file_is_dev(struct file *file,
+				    struct vfio_device *device)
+{
+	struct vfio_device *cdev_device;
+
+	cdev_device = vfio_device_get_from_cdev(file);
+	if (IS_ERR(cdev_device))
+		return false;
+
+	return cdev_device == device;
+}
 
 /**
  * vfio_file_has_dev - True if the VFIO file is a handle for device
@@ -1132,12 +1210,16 @@ EXPORT_SYMBOL_GPL(vfio_file_set_kvm);
  */
 bool vfio_file_has_dev(struct file *file, struct vfio_device *device)
 {
-	struct vfio_group *group = file->private_data;
+	if (vfio_is_group_file(file)) {
+		struct vfio_group *group = file->private_data;
 
-	if (!vfio_is_group_file(file))
+		return vfio_group_has_dev(group, device);
+	} else if (file->f_op == &vfio_device_fops) {
+		return vfio_device_file_is_dev(file, device);
+	} else {
 		return false;
+	}
 
-	return vfio_group_has_dev(group, device);
 }
 EXPORT_SYMBOL_GPL(vfio_file_has_dev);
 
