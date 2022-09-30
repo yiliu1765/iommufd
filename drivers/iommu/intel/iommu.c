@@ -4437,7 +4437,14 @@ static bool intel_iommu_capable(enum iommu_cap cap)
 		return irq_remapping_enabled == 1;
 	if (cap == IOMMU_CAP_PRE_BOOT_PROTECTION)
 		return dmar_platform_optin();
+	if (cap == IOMMU_CAP_ENFORCE_CACHE_COHERENCY) {
+		/* FIXME: use after rebase:
+		struct device_domain_info *info = dev_iommu_priv_get(device);
 
+		return ecap_sc_support(info->iommu->ecap);
+		*/
+		return true;
+	}
 	return false;
 }
 
