@@ -647,6 +647,17 @@ EXPORT_SYMBOL_GPL(vfio_unregister_group_dev);
 /*
  * VFIO Group fd, /dev/vfio/$GROUP
  */
+static void vfio_group_lock(struct vfio_group *group)
+{
+	mutex_lock(&group->group_lock);
+}
+
+static void vfio_group_unlock(struct vfio_group *group)
+{
+	lockdep_assert_held(&group->group_lock);
+	mutex_unlock(&group->group_lock);
+}
+
 /*
  * VFIO_GROUP_UNSET_CONTAINER should fail if there are other users or
  * if there was no container to unset.  Since the ioctl is called on
@@ -657,7 +668,7 @@ static int vfio_group_ioctl_unset_container(struct vfio_group *group)
 {
 	int ret = 0;
 
-	mutex_lock(&group->group_lock);
+	vfio_group_lock(group);
 	if (!group->container) {
 		ret = -EINVAL;
 		goto out_unlock;
@@ -669,7 +680,7 @@ static int vfio_group_ioctl_unset_container(struct vfio_group *group)
 	vfio_group_detach_container(group);
 
 out_unlock:
-	mutex_unlock(&group->group_lock);
+	vfio_group_unlock(group);
 	return ret;
 }
 
@@ -688,7 +699,7 @@ static int vfio_group_ioctl_set_container(struct vfio_group *group,
 	if (!f.file)
 		return -EBADF;
 
-	mutex_lock(&group->group_lock);
+	vfio_group_lock(group);
 	if (group->container || WARN_ON(group->container_users)) {
 		ret = -EINVAL;
 		goto out_unlock;
@@ -701,7 +712,7 @@ static int vfio_group_ioctl_set_container(struct vfio_group *group,
 	}
 
 out_unlock:
-	mutex_unlock(&group->group_lock);
+	vfio_group_unlock(group);
 	fdput(f);
 	return ret;
 }
@@ -728,7 +739,7 @@ static int vfio_device_first_open(struct vfio_device *device)
 	 * the device driver will use it, it must obtain a reference and release
 	 * it during close_device.
 	 */
-	mutex_lock(&device->group->group_lock);
+	vfio_group_lock(device->group);
 	ret = vfio_group_use_container(device->group);
 	if (ret)
 		goto err_module_put;
@@ -740,14 +751,14 @@ static int vfio_device_first_open(struct vfio_device *device)
 			goto err_container;
 	}
 	vfio_device_container_register(device);
-	mutex_unlock(&device->group->group_lock);
+	vfio_group_unlock(device->group);
 	return 0;
 
 err_container:
 	vfio_group_unuse_container(device->group);
 err_module_put:
 	device->kvm = NULL;
-	mutex_unlock(&device->group->group_lock);
+	vfio_group_unlock(device->group);
 	module_put(device->dev->driver->owner);
 	return ret;
 }
@@ -756,13 +767,13 @@ static void vfio_device_last_close(struct vfio_device *device)
 {
 	lockdep_assert_held(&device->dev_set->lock);
 
-	mutex_lock(&device->group->group_lock);
+	vfio_group_lock(device->group);
 	vfio_device_container_unregister(device);
 	if (device->ops->close_device)
 		device->ops->close_device(device);
 	device->kvm = NULL;
 	vfio_group_unuse_container(device->group);
-	mutex_unlock(&device->group->group_lock);
+	vfio_group_unlock(device->group);
 	module_put(device->dev->driver->owner);
 }
 
@@ -872,13 +883,13 @@ static int vfio_group_ioctl_get_status(struct vfio_group *group,
 
 	status.flags = 0;
 
-	mutex_lock(&group->group_lock);
+	vfio_group_lock(group);
 	if (group->container)
 		status.flags |= VFIO_GROUP_FLAGS_CONTAINER_SET |
 				VFIO_GROUP_FLAGS_VIABLE;
 	else if (!iommu_group_dma_owner_claimed(group->iommu_group))
 		status.flags |= VFIO_GROUP_FLAGS_VIABLE;
-	mutex_unlock(&group->group_lock);
+	vfio_group_unlock(group);
 
 	if (copy_to_user(arg, &status, minsz))
 		return -EFAULT;
@@ -911,7 +922,7 @@ static int vfio_group_fops_open(struct inode *inode, struct file *filep)
 		container_of(inode->i_cdev, struct vfio_group, cdev);
 	int ret;
 
-	mutex_lock(&group->group_lock);
+	vfio_group_lock(group);
 
 	/*
 	 * drivers can be zero if this races with vfio_device_remove_group(), it
@@ -938,7 +949,7 @@ static int vfio_group_fops_open(struct inode *inode, struct file *filep)
 	filep->private_data = group;
 	ret = 0;
 out_unlock:
-	mutex_unlock(&group->group_lock);
+	vfio_group_unlock(group);
 	return ret;
 }
 
@@ -948,7 +959,7 @@ static int vfio_group_fops_release(struct inode *inode, struct file *filep)
 
 	filep->private_data = NULL;
 
-	mutex_lock(&group->group_lock);
+	vfio_group_lock(group);
 	/*
 	 * Device FDs hold a group file reference, therefore the group release
 	 * is only called when there are no open devices.
@@ -957,7 +968,7 @@ static int vfio_group_fops_release(struct inode *inode, struct file *filep)
 	if (group->container)
 		vfio_group_detach_container(group);
 	group->opened_file = NULL;
-	mutex_unlock(&group->group_lock);
+	vfio_group_unlock(group);
 	swake_up_one(&group->opened_file_wait);
 
 	return 0;
@@ -1582,7 +1593,7 @@ bool vfio_file_enforced_coherent(struct file *file)
 	if (file->f_op != &vfio_group_fops)
 		return true;
 
-	mutex_lock(&group->group_lock);
+	vfio_group_lock(group);
 	if (group->container) {
 		ret = vfio_container_ioctl_check_extension(group->container,
 							   VFIO_DMA_CC_IOMMU);
@@ -1594,7 +1605,7 @@ bool vfio_file_enforced_coherent(struct file *file)
 		 */
 		ret = true;
 	}
-	mutex_unlock(&group->group_lock);
+	vfio_group_unlock(group);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(vfio_file_enforced_coherent);
@@ -1614,9 +1625,9 @@ void vfio_file_set_kvm(struct file *file, struct kvm *kvm)
 	if (file->f_op != &vfio_group_fops)
 		return;
 
-	mutex_lock(&group->group_lock);
+	vfio_group_lock(group);
 	group->kvm = kvm;
-	mutex_unlock(&group->group_lock);
+	vfio_group_unlock(group);
 }
 EXPORT_SYMBOL_GPL(vfio_file_set_kvm);
 
