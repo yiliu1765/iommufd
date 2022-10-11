@@ -110,7 +110,21 @@ struct vfio_iommu_driver {
 int vfio_register_iommu_driver(const struct vfio_iommu_driver_ops *ops);
 void vfio_unregister_iommu_driver(const struct vfio_iommu_driver_ops *ops);
 
+void vfio_device_put_registration(struct vfio_device *device);
+bool vfio_device_try_get_registration(struct vfio_device *device);
 bool vfio_assert_device_open(struct vfio_device *device);
+struct file *vfio_device_open(struct vfio_device *device);
+
+void vfio_device_remove_group(struct vfio_device *device);
+struct vfio_group *vfio_noiommu_group_alloc(struct device *dev,
+		enum vfio_group_type type);
+struct vfio_group *vfio_group_find_or_alloc(struct device *dev);
+void vfio_device_register_group(struct vfio_device *device);
+void vfio_device_unregister_group(struct vfio_device *device);
+void vfio_group_lock(struct vfio_group *group);
+void vfio_group_unlock(struct vfio_group *group);
+int __init vfio_group_init(void);
+void vfio_group_cleanup(void);
 
 struct vfio_container *vfio_container_from_file(struct file *filep);
 int vfio_group_use_container(struct vfio_group *group);
