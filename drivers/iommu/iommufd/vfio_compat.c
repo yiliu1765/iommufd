@@ -26,16 +26,35 @@ out_unlock:
 }
 
 /**
- * iommufd_vfio_compat_ioas_id - Return the IOAS ID that vfio should use
+ * iommufd_vfio_compat_ioas_get_id - Ensure a comat IOAS exists
  * @ictx: Context to operate on
- * @out_ioas_id: The ioas_id the caller should use
+ *
+ * Return the ID of the current compatibility ioas. The ID can be passed into
+ * other functions that take an ioas_id.
+ */
+int iommufd_vfio_compat_ioas_get_id(struct iommufd_ctx *ictx, u32 *out_ioas_id)
+{
+	struct iommufd_ioas *ioas;
+
+	ioas = get_compat_ioas(ictx);
+	if (IS_ERR(ioas))
+		return PTR_ERR(ioas);
+	*out_ioas_id = ioas->obj.id;
+	iommufd_put_object(&ioas->obj);
+	return 0;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_vfio_compat_ioas_get_id, IOMMUFD_VFIO);
+
+/**
+ * iommufd_vfio_compat_ioas_create_id - Return the IOAS ID that vfio should use
+ * @ictx: Context to operate on
  *
  * The compatibility IOAS is the IOAS that the vfio compatibility ioctls operate
  * on since they do not have an IOAS ID input in their ABI. Only attaching a
- * group should cause a default creation of the internal ioas, this returns the
- * existing ioas if it has already been assigned somehow.
+ * group should cause a default creation of the internal ioas, this does nothing
+ * if an existing ioas has already been assigned somehow.
  */
-int iommufd_vfio_compat_ioas_id(struct iommufd_ctx *ictx, u32 *out_ioas_id)
+int iommufd_vfio_compat_ioas_create_id(struct iommufd_ctx *ictx)
 {
 	struct iommufd_ioas *ioas = NULL;
 	struct iommufd_ioas *out_ioas;
@@ -53,7 +72,6 @@ int iommufd_vfio_compat_ioas_id(struct iommufd_ctx *ictx, u32 *out_ioas_id)
 	}
 	xa_unlock(&ictx->objects);
 
-	*out_ioas_id = out_ioas->obj.id;
 	if (out_ioas != ioas) {
 		iommufd_put_object(&out_ioas->obj);
 		iommufd_object_abort(ictx, &ioas->obj);
@@ -68,7 +86,7 @@ int iommufd_vfio_compat_ioas_id(struct iommufd_ctx *ictx, u32 *out_ioas_id)
 	iommufd_object_finalize(ictx, &ioas->obj);
 	return 0;
 }
-EXPORT_SYMBOL_NS_GPL(iommufd_vfio_compat_ioas_id, IOMMUFD_VFIO);
+EXPORT_SYMBOL_NS_GPL(iommufd_vfio_compat_ioas_create_id, IOMMUFD_VFIO);
 
 int iommufd_vfio_ioas(struct iommufd_ucmd *ucmd)
 {
@@ -235,6 +253,9 @@ static int iommufd_vfio_check_extension(struct iommufd_ctx *ictx,
 	case VFIO_UNMAP_ALL:
 		return 1;
 
+	case VFIO_NOIOMMU_IOMMU:
+	return IS_ENABLED(CONFIG_VFIO_NOIOMMU);
+
 	case VFIO_DMA_CC_IOMMU:
 		return iommufd_vfio_cc_iommu(ictx);
 
@@ -263,6 +284,17 @@ static int iommufd_vfio_set_iommu(struct iommufd_ctx *ictx, unsigned long type)
 {
 	struct iommufd_ioas *ioas = NULL;
 	int rc = 0;
+
+	/*
+	 * Emulation for NOIMMU is imperfect in that VFIO blocks almost all
+	 * other ioctls. We let them keep working but they mostly fail since no
+	 * IOAS should exist.
+	 */
+	if (IS_ENABLED(CONFIG_VFIO_NOIOMMU) && type == VFIO_NOIOMMU_IOMMU) {
+		if (!capable(CAP_SYS_RAWIO))
+			return -EPERM;
+		return 0;
+	}
 
 	if (type != VFIO_TYPE1_IOMMU && type != VFIO_TYPE1v2_IOMMU)
 		return -EINVAL;
