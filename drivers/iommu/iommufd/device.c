@@ -410,7 +410,8 @@ out_abort:
  * The caller should return the resulting pt_id back to userspace.
  * This function is undone by calling iommufd_device_detach().
  */
-int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
+int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id,
+			  u32 flags)
 {
 	struct iommufd_object *pt_obj;
 	int rc;
@@ -419,6 +420,10 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
 	if (IS_ERR(pt_obj))
 		return PTR_ERR(pt_obj);
 
+	/*
+	 * FIXME: Need to handle the IOMMUFD_ATTACH_FLAGS_REPLACE_PT flag
+	 *	  Wait for iommu API.
+	 */
 	switch (pt_obj->type) {
 	case IOMMUFD_OBJ_HW_PAGETABLE: {
 		struct iommufd_hw_pagetable *hwpt =
