@@ -18,6 +18,8 @@ struct vfio_container;
 
 struct vfio_device_file {
 	struct vfio_device *device;
+	bool is_cdev_device;
+
 	bool access_granted;
 	spinlock_t kvm_ref_lock; /* protect kvm field */
 	struct kvm *kvm;
@@ -30,7 +32,7 @@ int vfio_device_open(struct vfio_device_file *df,
 		     u32 *dev_id, u32 *pt_id);
 void vfio_device_close(struct vfio_device_file *df);
 struct vfio_device_file *
-vfio_allocate_device_file(struct vfio_device *device);
+vfio_allocate_device_file(struct vfio_device *device, bool is_cdev_device);
 
 extern const struct file_operations vfio_device_fops;
 
