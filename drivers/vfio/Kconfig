@@ -33,6 +33,9 @@ config VFIO_IOMMU_SPAPR_TCE
 	depends on SPAPR_TCE_IOMMU
 	default VFIO
 
+endif
+
+if VFIO_CONTAINER || IOMMUFD_VFIO_CONTAINER
 config VFIO_NOIOMMU
 	bool "VFIO No-IOMMU support"
 	help
