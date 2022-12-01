@@ -30,6 +30,7 @@ int vfio_iommufd_bind(struct vfio_device *vdev, struct iommufd_ctx *ictx)
 		 */
 		if (!iommufd_vfio_compat_ioas_get_id(ictx, &ioas_id))
 			return -EPERM;
+		printk("%s noiommu is used\n", __func__);
 		return 0;
 	}
 
