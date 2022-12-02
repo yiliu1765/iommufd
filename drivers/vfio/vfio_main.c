@@ -43,6 +43,9 @@
 static struct vfio {
 	struct class			*device_class;
 	struct ida			device_ida;
+#if IS_ENABLED(CONFIG_IOMMUFD)
+	dev_t                           device_devt;
+#endif
 } vfio;
 
 static DEFINE_XARRAY(vfio_device_set_xa);
@@ -156,7 +159,7 @@ static void vfio_device_release(struct device *dev)
 			container_of(dev, struct vfio_device, device);
 
 	vfio_release_device_set(device);
-	ida_free(&vfio.device_ida, device->index);
+	ida_free(&vfio.device_ida, MINOR(device->device.devt));
 
 	/*
 	 * kvfree() cannot be done here due to a life cycle mess in
@@ -211,15 +214,16 @@ EXPORT_SYMBOL_GPL(_vfio_alloc_device);
 int vfio_init_device(struct vfio_device *device, struct device *dev,
 		     const struct vfio_device_ops *ops)
 {
+	unsigned int minor;
 	int ret;
 
 	ret = ida_alloc_max(&vfio.device_ida, MINORMASK, GFP_KERNEL);
 	if (ret < 0) {
-		dev_dbg(dev, "Error to alloc index\n");
+		dev_dbg(dev, "Error to alloc minor\n");
 		return ret;
 	}
 
-	device->index = ret;
+	minor = ret;
 	init_completion(&device->comp);
 	device->dev = dev;
 	device->ops = ops;
@@ -234,11 +238,18 @@ int vfio_init_device(struct vfio_device *device, struct device *dev,
 	device->device.release = vfio_device_release;
 	device->device.class = vfio.device_class;
 	device->device.parent = device->dev;
+#if IS_ENABLED(CONFIG_IOMMUFD)
+	device->device.devt = MKDEV(MAJOR(vfio.device_devt), minor);
+	cdev_init(&device->cdev, &vfio_device_fops);
+	device->cdev.owner = THIS_MODULE;
+#else
+	device->index = ret;
+#endif
 	return 0;
 
 out_uninit:
 	vfio_release_device_set(device);
-	ida_free(&vfio.device_ida, device->index);
+	ida_free(&vfio.device_ida, minor);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(vfio_init_device);
@@ -257,6 +268,7 @@ EXPORT_SYMBOL_GPL(vfio_free_device);
 static int __vfio_register_dev(struct vfio_device *device,
 			       enum vfio_group_type type)
 {
+	unsigned int minor;
 	int ret;
 
 	if (WARN_ON(device->ops->bind_iommufd &&
@@ -271,7 +283,12 @@ static int __vfio_register_dev(struct vfio_device *device,
 	if (!device->dev_set)
 		vfio_assign_device_set(device, device);
 
-	ret = dev_set_name(&device->device, "vfio%d", device->index);
+#if IS_ENABLED(CONFIG_IOMMUFD)
+	minor = MINOR(device->device.devt);
+#else
+	minor = device->index;
+#endif
+	ret = dev_set_name(&device->device, "vfio%d", minor);
 	if (ret)
 		return ret;
 
@@ -279,7 +296,11 @@ static int __vfio_register_dev(struct vfio_device *device,
 	if (ret)
 		return ret;
 
+#if IS_ENABLED(CONFIG_IOMMUFD)
+	ret = cdev_device_add(&device->cdev, &device->device);
+#else
 	ret = device_add(&device->device);
+#endif
 	if (ret)
 		goto err_out;
 
@@ -319,6 +340,17 @@ void vfio_unregister_group_dev(struct vfio_device *device)
 	bool interrupted = false;
 	long rc;
 
+#if IS_ENABLED(CONFIG_IOMMUFD)
+	/*
+	 * Balances device_add in register path. Putting it as the first
+	 * operation in unregister to prevent registration refcount from
+	 * incrementing per cdev open.
+	 */
+	cdev_device_del(&device->cdev, &device->device);
+#else
+	device_del(&device->device);
+#endif
+
 	vfio_device_put_registration(device);
 	rc = try_wait_for_completion(&device->comp);
 	while (rc <= 0) {
@@ -343,9 +375,6 @@ void vfio_unregister_group_dev(struct vfio_device *device)
 	}
 
 	vfio_device_group_unregister(device);
-
-	/* Balances device_add in register path */
-	device_del(&device->device);
 
 	/* Balances vfio_device_set_group in register path */
 	vfio_device_remove_group(device);
@@ -521,6 +550,37 @@ static inline void vfio_device_pm_runtime_put(struct vfio_device *device)
 /*
  * VFIO Device fd
  */
+#if IS_ENABLED(CONFIG_IOMMUFD)
+static int vfio_device_fops_open(struct inode *inode, struct file *filep)
+{
+	struct vfio_device *device = container_of(inode->i_cdev,
+						  struct vfio_device, cdev);
+	struct vfio_device_file *df;
+	int ret;
+
+	if (!vfio_device_try_get_registration(device))
+		return -ENODEV;
+
+	/*
+	 * vfio device open is done in BIND_IOMMUFD for cdev, before
+	 * that, device access is blocked for this cdev open.
+	 */
+	df = vfio_allocate_device_file(device, true);
+	if (IS_ERR(df)) {
+		ret = PTR_ERR(df);
+		goto err_put_registration;
+	}
+
+	filep->private_data = df;
+
+	return 0;
+
+err_put_registration:
+	vfio_device_put_registration(device);
+	return ret;
+}
+#endif
+
 static int vfio_device_fops_release(struct inode *inode, struct file *filep)
 {
 	struct vfio_device_file *df = filep->private_data;
@@ -1084,6 +1144,9 @@ static int vfio_device_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 
 const struct file_operations vfio_device_fops = {
 	.owner		= THIS_MODULE,
+#if IS_ENABLED(CONFIG_IOMMUFD)
+	.open		= vfio_device_fops_open,
+#endif
 	.release	= vfio_device_fops_release,
 	.read		= vfio_device_fops_read,
 	.write		= vfio_device_fops_write,
@@ -1450,6 +1513,13 @@ EXPORT_SYMBOL(vfio_dma_rw);
 /*
  * Module/class support
  */
+#if IS_ENABLED(CONFIG_IOMMUFD)
+static char *vfio_device_devnode(struct device *dev, umode_t *mode)
+{
+	return kasprintf(GFP_KERNEL, "vfio/devices/%s", dev_name(dev));
+}
+#endif
+
 static int __init vfio_init(void)
 {
 	int ret;
@@ -1467,9 +1537,21 @@ static int __init vfio_init(void)
 		goto err_dev_class;
 	}
 
+#if IS_ENABLED(CONFIG_IOMMUFD)
+	vfio.device_class->devnode = vfio_device_devnode;
+	ret = alloc_chrdev_region(&vfio.device_devt, 0,
+				  MINORMASK + 1, "vfio-dev");
+	if (ret)
+		goto err_alloc_dev_chrdev;
+#endif
 	pr_info(DRIVER_DESC " version: " DRIVER_VERSION "\n");
 	return 0;
 
+#if IS_ENABLED(CONFIG_IOMMUFD)
+err_alloc_dev_chrdev:
+	class_destroy(vfio.device_class);
+	vfio.device_class = NULL;
+#endif
 err_dev_class:
 	vfio_group_cleanup();
 	return ret;
@@ -1478,6 +1560,9 @@ err_dev_class:
 static void __exit vfio_cleanup(void)
 {
 	ida_destroy(&vfio.device_ida);
+#if IS_ENABLED(CONFIG_IOMMUFD)
+	unregister_chrdev_region(vfio.device_devt, MINORMASK + 1);
+#endif
 	class_destroy(vfio.device_class);
 	vfio.device_class = NULL;
 	vfio_group_cleanup();
