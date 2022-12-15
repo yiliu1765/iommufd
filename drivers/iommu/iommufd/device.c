@@ -8,6 +8,7 @@
 
 #include "io_pagetable.h"
 #include "iommufd_private.h"
+#include "iommufd_test.h"
 
 MODULE_IMPORT_NS(IOMMUFD_INTERNAL);
 
