@@ -611,6 +611,13 @@ TEST_FAIL_NTH(basic_fail_nth, device)
 				  &idev_id))
 		return -1;
 
+	{
+		struct iommu_test_hw_info info;
+
+		if (_test_cmd_get_hw_info(self->fd, idev_id, &info, sizeof(info)))
+			return -1;
+	}
+
 	if (_test_cmd_hwpt_alloc(self->fd, idev_id, ioas_id, &hwpt_id))
 		return -1;
 
