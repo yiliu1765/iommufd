@@ -13,6 +13,7 @@ enum {
 	IOMMU_TEST_OP_MOCK_DOMAIN_REPLACE,
 	IOMMU_TEST_OP_MD_CHECK_MAP,
 	IOMMU_TEST_OP_MD_CHECK_REFS,
+	IOMMU_TEST_OP_MD_CHECK_IOTLB,
 	IOMMU_TEST_OP_CREATE_ACCESS,
 	IOMMU_TEST_OP_ACCESS_SET_IOAS,
 	IOMMU_TEST_OP_DESTROY_ACCESS_PAGES,
@@ -68,6 +69,9 @@ struct iommu_test_cmd {
 			__aligned_u64 uptr;
 			__u32 refs;
 		} check_refs;
+		struct {
+			__u32 iotlb;
+		} check_iotlb;
 		struct {
 			__u32 out_access_fd;
 			__u32 flags;
