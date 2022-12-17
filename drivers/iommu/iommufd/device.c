@@ -964,7 +964,6 @@ EXPORT_SYMBOL_NS_GPL(iommufd_access_rw, IOMMUFD);
  * Creating a real iommufd_device is too hard, bypass creating a iommufd_device
  * and go directly to attaching a domain.
  */
-
 int iommufd_device_selftest_attach(struct iommufd_ctx *ictx,
 				   struct iommufd_hw_pagetable *hwpt)
 {
