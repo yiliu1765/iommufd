@@ -9,6 +9,8 @@
 #include <linux/refcount.h>
 #include <linux/uaccess.h>
 
+#include "../iommu-priv.h"
+
 struct iommu_domain;
 struct iommu_group;
 struct iommu_option;
