@@ -229,6 +229,15 @@ struct iommu_iotlb_gather {
  *           after use. Return the data buffer if success, or ERR_PTR on
  *           failure.
  * @domain_alloc: allocate iommu domain
+ * @domain_alloc_user: allocate user iommu domain
+ * @domain_alloc_user_data_len: return the required length of the user data
+ *                              to allocate a specific type user iommu domain.
+ *                              @hwpt_type is defined as enum iommu_hwpt_type
+ *                              in include/uapi/linux/iommufd.h. The returned
+ *                              length is the corresponding sizeof driver data
+ *                              structures in include/uapi/linux/iommufd.h.
+ *                              -EOPNOTSUPP would be returned if the input
+ *                              @hwpt_type is not supported by the driver.
  * @probe_device: Add device to iommu driver handling
  * @release_device: Remove device from iommu driver handling
  * @probe_finalize: Do final setup work after the device is added to an IOMMU
@@ -269,6 +278,10 @@ struct iommu_ops {
 
 	/* Domain allocation and freeing by the iommu driver */
 	struct iommu_domain *(*domain_alloc)(unsigned iommu_domain_type);
+	struct iommu_domain *(*domain_alloc_user)(struct device *dev,
+						  struct iommu_domain *parent,
+						  const void *user_data);
+	int (*domain_alloc_user_data_len)(u32 hwpt_type);
 
 	struct iommu_device *(*probe_device)(struct device *dev);
 	void (*release_device)(struct device *dev);
