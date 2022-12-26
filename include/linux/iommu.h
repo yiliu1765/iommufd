@@ -14,6 +14,7 @@
 #include <linux/err.h>
 #include <linux/of.h>
 #include <uapi/linux/iommu.h>
+#include <uapi/linux/iommufd.h>
 
 #define IOMMU_READ	(1 << 0)
 #define IOMMU_WRITE	(1 << 1)
@@ -225,6 +226,35 @@ struct iommu_iotlb_gather {
 	bool			queued;
 };
 
+/*
+ * The user data to allocate a specific type user iommu domain
+ *
+ * This includes the corresponding driver data structures in
+ * include/uapi/linux/iommufd.h.
+ */
+union iommu_domain_user_data {
+};
+
+/**
+ * struct iommu_user_data_len - range of userspace data length
+ *
+ * A userspace data is an uAPI that is defined in include/uapi/linux/iommufd.h
+ *
+ * @min: the initial size of the user data structure for compatibility.
+ *       Note that it should be never updated once the driver sets it.
+ * @max: the latest size of the user data structure.
+ */
+struct iommu_user_data_len {
+	const size_t min;
+	const size_t max;
+};
+
+#define IOMMU_USER_DATA_LENGTH(_struct, _origin_last)                    \
+	{                                                                \
+		.min = offsetofend(_struct, _origin_last),               \
+		.max = sizeof(_struct),                                  \
+	}
+
 /**
  * struct iommu_ops - iommu ops and capabilities
  * @capable: check capability
@@ -237,6 +267,19 @@ struct iommu_iotlb_gather {
  *           after use. Return the data buffer if success, or ERR_PTR on
  *           failure.
  * @domain_alloc: allocate iommu domain
+ * @domain_alloc_user: allocate a user iommu domain corresponding to the input
+ *                     @hwpt_type that is defined as enum iommu_hwpt_type in the
+ *                     include/uapi/linux/iommufd.h. Different from domain_alloc
+ *                     it requires iommu driver to fully initialize a new domain
+ *                     including the generic iommu_domain struct.
+ *                     Upon success, if the @user_data is valid and the @parent
+ *                     points to a kernel-managed domain, the new domain must be
+ *                     IOMMU_DOMAIN_NESTED type; otherwise, the @parent must be
+ *                     NULL while the @user_data can be optionally provided, the
+ *                     new domain must be IOMMU_DOMAIN_UNMANAGED type.
+ *                     Upon failure, ERR_PTR must be returned.
+ * @domain_alloc_user_data_len: A driver that supports an @user_data input for
+ *                              @domain_alloc_user must provide its length range
  * @probe_device: Add device to iommu driver handling
  * @release_device: Remove device from iommu driver handling
  * @probe_finalize: Do final setup work after the device is added to an IOMMU
@@ -269,6 +312,11 @@ struct iommu_ops {
 
 	/* Domain allocation and freeing by the iommu driver */
 	struct iommu_domain *(*domain_alloc)(unsigned iommu_domain_type);
+	struct iommu_domain *(*domain_alloc_user)(struct device *dev,
+						  enum iommu_hwpt_type hwpt_type,
+						  struct iommu_domain *parent,
+						  const union iommu_domain_user_data *user_data);
+	const struct iommu_user_data_len domain_alloc_user_data_len;
 
 	struct iommu_device *(*probe_device)(struct device *dev);
 	void (*release_device)(struct device *dev);
