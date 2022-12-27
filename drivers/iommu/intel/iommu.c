@@ -4077,19 +4077,35 @@ intel_iommu_domain_alloc_user(struct device *dev, u32 flags,
 			      struct iommu_domain *parent,
 			      const struct iommu_user_data *user_data)
 {
+	bool request_nest_parent = flags & IOMMU_HWPT_ALLOC_NEST_PARENT;
 	struct iommu_domain *domain;
 	struct intel_iommu *iommu;
+
+	if (hwpt_type != IOMMU_HWPT_TYPE_DEFAULT &&
+	    hwpt_type != IOMMU_HWPT_TYPE_VTD_S1)
+		return ERR_PTR(-EINVAL);
+
+	if ((hwpt_type == IOMMU_HWPT_TYPE_DEFAULT) == !!parent)
+		return ERR_PTR(-EINVAL);
+
+	if (parent && request_nest_parent)
+		return ERR_PTR(-EINVAL);
 
 	iommu = device_to_iommu(dev, NULL, NULL);
 	if (!iommu)
 		return ERR_PTR(-ENODEV);
 
-	if ((flags & IOMMU_HWPT_ALLOC_NEST_PARENT) && !ecap_nest(iommu->ecap))
+	if ((parent || request_nest_parent) && !ecap_nest(iommu->ecap))
 		return ERR_PTR(-EOPNOTSUPP);
 
-	domain = iommu_domain_alloc(dev->bus);
-	if (!domain)
-		domain = ERR_PTR(-ENOMEM);
+	if (parent) {
+		domain = intel_nested_domain_alloc(parent, user_data);
+	} else {
+		domain = iommu_domain_alloc(dev->bus);
+		if (!domain)
+			domain = ERR_PTR(-ENOMEM);
+	}
+
 	return domain;
 }
 
