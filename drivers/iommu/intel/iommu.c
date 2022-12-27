@@ -4076,7 +4076,7 @@ intel_iommu_domain_alloc_user(struct device *dev, u32 flags,
 			      struct iommu_domain *parent,
 			      const struct iommu_user_data *user_data)
 {
-	struct iommu_domain *domain;
+	bool request_nest_parent = flags & IOMMU_HWPT_ALLOC_NEST_PARENT;
 	struct intel_iommu *iommu;
 
 	if (flags & (~IOMMU_HWPT_ALLOC_NEST_PARENT))
@@ -4086,18 +4086,35 @@ intel_iommu_domain_alloc_user(struct device *dev, u32 flags,
 	if (!iommu)
 		return ERR_PTR(-ENODEV);
 
-	if ((flags & IOMMU_HWPT_ALLOC_NEST_PARENT) && !ecap_nest(iommu->ecap))
-		return ERR_PTR(-EOPNOTSUPP);
+	if (!user_data) { /* Must be PAGING domain */
+		struct iommu_domain *domain;
 
-	/*
-	 * domain_alloc_user op needs to fully initialize a domain
-	 * before return, so uses iommu_domain_alloc() here for
-	 * simple.
-	 */
-	domain = iommu_domain_alloc(dev->bus);
-	if (!domain)
-		domain = ERR_PTR(-ENOMEM);
-	return domain;
+		if (request_nest_parent && !ecap_nest(iommu->ecap))
+			return ERR_PTR(-EOPNOTSUPP);
+		if (parent)
+			return ERR_PTR(-EINVAL);
+		/*
+		 * domain_alloc_user op needs to fully initialize a domain
+		 * before return, so uses iommu_domain_alloc() here for
+		 * simple.
+		 */
+		domain = iommu_domain_alloc(dev->bus);
+		if (!domain)
+			return ERR_PTR(-ENOMEM);
+		return domain;
+	}
+
+	/* Must be nested domain */
+	if (!ecap_nest(iommu->ecap))
+		return ERR_PTR(-EOPNOTSUPP);
+	if (user_data->type != IOMMU_HWPT_DATA_VTD_S1)
+		return ERR_PTR(-EOPNOTSUPP);
+	if (!parent || parent->ops != intel_iommu_ops.default_domain_ops)
+		return ERR_PTR(-EINVAL);
+	if (request_nest_parent)
+		return ERR_PTR(-EINVAL);
+
+	return intel_nested_domain_alloc(parent, user_data);
 }
 
 static void intel_iommu_domain_free(struct iommu_domain *domain)
