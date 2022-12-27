@@ -28,6 +28,7 @@
 #include "../dma-iommu.h"
 #include "../irq_remapping.h"
 #include "../iommu-sva.h"
+#include "../iommu-priv.h"
 #include "pasid.h"
 #include "cap_audit.h"
 #include "perfmon.h"
@@ -4049,34 +4050,40 @@ static struct iommu_domain blocking_domain = {
 	}
 };
 
-static struct iommu_domain *intel_iommu_domain_alloc(unsigned type)
+static struct iommu_domain *_intel_iommu_domain_alloc(unsigned type, int width)
 {
 	struct dmar_domain *dmar_domain;
 	struct iommu_domain *domain;
 
+	dmar_domain = alloc_domain(type);
+	if (!dmar_domain) {
+		pr_err("Can't allocate dmar_domain\n");
+		return NULL;
+	}
+	if (md_domain_init(dmar_domain, DEFAULT_DOMAIN_ADDRESS_WIDTH)) {
+		pr_err("Domain initialization failed\n");
+		domain_exit(dmar_domain);
+		return NULL;
+	}
+
+	domain = &dmar_domain->domain;
+	domain->geometry.aperture_start = 0;
+	domain->geometry.aperture_end   =
+			__DOMAIN_MAX_ADDR(dmar_domain->gaw);
+	domain->geometry.force_aperture = true;
+
+	return domain;
+}
+
+static struct iommu_domain *intel_iommu_domain_alloc(unsigned type)
+{
 	switch (type) {
 	case IOMMU_DOMAIN_BLOCKED:
 		return &blocking_domain;
 	case IOMMU_DOMAIN_DMA:
 	case IOMMU_DOMAIN_UNMANAGED:
-		dmar_domain = alloc_domain(type);
-		if (!dmar_domain) {
-			pr_err("Can't allocate dmar_domain\n");
-			return NULL;
-		}
-		if (md_domain_init(dmar_domain, DEFAULT_DOMAIN_ADDRESS_WIDTH)) {
-			pr_err("Domain initialization failed\n");
-			domain_exit(dmar_domain);
-			return NULL;
-		}
-
-		domain = &dmar_domain->domain;
-		domain->geometry.aperture_start = 0;
-		domain->geometry.aperture_end   =
-				__DOMAIN_MAX_ADDR(dmar_domain->gaw);
-		domain->geometry.force_aperture = true;
-
-		return domain;
+		return _intel_iommu_domain_alloc(type,
+						 DEFAULT_DOMAIN_ADDRESS_WIDTH);
 	case IOMMU_DOMAIN_IDENTITY:
 		return &si_domain->domain;
 	case IOMMU_DOMAIN_SVA:
@@ -4086,6 +4093,40 @@ static struct iommu_domain *intel_iommu_domain_alloc(unsigned type)
 	}
 
 	return NULL;
+}
+
+static struct iommu_domain *
+intel_iommu_domain_alloc_user(struct device *dev,
+			      enum iommu_hwpt_type hwpt_type,
+			      const struct iommu_user_data *user_data)
+{
+	const size_t min_len =
+		offsetofend(struct iommu_hwpt_default, max_addr);
+	int width = DEFAULT_DOMAIN_ADDRESS_WIDTH;
+	struct iommu_domain *domain;
+
+	if (hwpt_type != IOMMU_HWPT_TYPE_DEFAULT)
+		return ERR_PTR(-EINVAL);
+
+	if (user_data) {
+		struct iommu_hwpt_default data;
+		int rc = iommu_copy_user_data(&data, user_data,
+					      sizeof(data), min_len);
+		if (rc)
+			return ERR_PTR(rc);
+		if (data.flags)
+			return ERR_PTR(-EINVAL);
+		width = ilog2(__roundup_pow_of_two(data.max_addr));
+		if (width > DEFAULT_DOMAIN_ADDRESS_WIDTH)
+			return ERR_PTR(-EINVAL);
+	}
+
+	domain = _intel_iommu_domain_alloc(IOMMU_DOMAIN_UNMANAGED, width);
+	if (!domain)
+		return ERR_PTR(-ENOMEM);
+
+	iommu_domain_init(domain, dev->bus, IOMMU_DOMAIN_UNMANAGED);
+	return domain;
 }
 
 static void intel_iommu_domain_free(struct iommu_domain *domain)
@@ -4754,6 +4795,7 @@ const struct iommu_ops intel_iommu_ops = {
 	.capable		= intel_iommu_capable,
 	.hw_info		= intel_iommu_hw_info,
 	.domain_alloc		= intel_iommu_domain_alloc,
+	.domain_alloc_user	= intel_iommu_domain_alloc_user,
 	.probe_device		= intel_iommu_probe_device,
 	.probe_finalize		= intel_iommu_probe_finalize,
 	.release_device		= intel_iommu_release_device,

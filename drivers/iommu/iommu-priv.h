@@ -27,4 +27,7 @@ void iommu_device_unregister_bus(struct iommu_device *iommu,
 				 struct bus_type *bus,
 				 struct notifier_block *nb);
 
+void iommu_domain_init(struct iommu_domain *domain,
+		       const struct bus_type *bus,
+		       unsigned type);
 #endif /* __LINUX_IOMMU_PRIV_H */
