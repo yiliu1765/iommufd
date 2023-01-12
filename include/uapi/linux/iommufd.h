@@ -45,6 +45,7 @@ enum {
 	IOMMUFD_CMD_IOAS_UNMAP,
 	IOMMUFD_CMD_OPTION,
 	IOMMUFD_CMD_VFIO_IOAS,
+	IOMMUFD_CMD_DEVICE_GET_INFO,
 };
 
 /**
@@ -371,4 +372,39 @@ struct iommu_device_info_vtd {
 	__aligned_u64 cap_reg;
 	__aligned_u64 ecap_reg;
 };
+
+/**
+ * struct iommu_device_info - ioctl(IOMMU_DEVICE_GET_INFO)
+ * @size: sizeof(struct iommu_device_info)
+ * @flags: Must be 0
+ * @dev_id: The device being attached to the IOMMU
+ * @data_len: Input the type specific data buffer length in bytes
+ * @data_ptr: Pointer to the type specific structure (e.g.
+ *	      struct iommu_device_info_vtd)
+ * @out_device_type: Output the underlying iommu hardware type, it is
+ *		   one of enum iommu_device_data_type.
+ * @__reserved: Must be 0
+ *
+ * Query the hardware iommu capability for given device which has been
+ * bound to iommufd. @data_len is set to be the size of the buffer to
+ * type specific data and the data will be filled. Trailing bytes are
+ * zeroed if the user buffer is larger than the data kernel has.
+ *
+ * The type specific data would be used to sync capability between the
+ * vIOMMU and the hardware IOMMU, also for the availabillity checking of
+ * iommu hardware features like dirty page tracking in I/O page table.
+ *
+ * The @out_device_type will be filled if the ioctl succeeds. It would
+ * be used to decode the data filled in the buffer pointed by @data_ptr.
+ */
+struct iommu_device_info {
+	__u32 size;
+	__u32 flags;
+	__u32 dev_id;
+	__u32 data_len;
+	__aligned_u64 data_ptr;
+	__u32 out_device_type;
+	__u32 __reserved;
+};
+#define IOMMU_DEVICE_GET_INFO _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEVICE_GET_INFO)
 #endif
