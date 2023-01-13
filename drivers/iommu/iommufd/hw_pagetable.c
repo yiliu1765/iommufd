@@ -370,4 +370,40 @@ int iommufd_hwpt_get_dirty_bitmap(struct iommufd_ucmd *ucmd)
 
 	iommufd_put_object(ucmd->ictx, &hwpt_paging->common.obj);
 	return rc;
+};
+
+int iommufd_hwpt_invalidate(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_hwpt_invalidate *cmd = ucmd->cmd;
+	struct iommu_user_data_array data_array = {
+		.type = cmd->req_type,
+		.uptr = u64_to_user_ptr(cmd->reqs_uptr),
+		.entry_len = cmd->req_len,
+		.entry_num = cmd->req_num,
+	};
+	struct iommufd_hw_pagetable *hwpt;
+	int rc = 0;
+
+	if (cmd->req_num && (!cmd->reqs_uptr || !cmd->req_len)) {
+		data_array.entry_num = 0;
+		rc = -EINVAL;
+		goto out;
+	}
+
+	hwpt = iommufd_hw_pagetable_get_nested(ucmd, cmd->hwpt_id);
+	if (IS_ERR(hwpt)) {
+		data_array.entry_num = 0;
+		rc = PTR_ERR(hwpt);
+		goto out;
+	}
+
+	rc = hwpt->domain->ops->cache_invalidate_user(hwpt->domain,
+						      &data_array);
+
+	iommufd_put_object(ucmd->ictx, &hwpt->obj);
+out:
+	cmd->req_num = data_array.entry_num;
+	if (iommufd_ucmd_respond(ucmd, sizeof(*cmd)))
+		return -EFAULT;
+	return rc;
 }
