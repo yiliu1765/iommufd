@@ -384,3 +384,31 @@ out_put_idev:
 	iommufd_put_object(&idev->obj);
 	return rc;
 }
+
+int iommufd_hwpt_invalidate(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_hwpt_invalidate *cmd = ucmd->cmd;
+	struct iommufd_hw_pagetable *hwpt;
+	struct iommu_user_data data = {
+		.uptr = u64_to_user_ptr(cmd->data_uptr),
+		.len = cmd->data_len,
+	};
+	int rc = 0;
+
+	if (!cmd->data_len || cmd->__reserved)
+		return -EOPNOTSUPP;
+
+	hwpt = iommufd_get_hwpt(ucmd, cmd->hwpt_id);
+	if (IS_ERR(hwpt))
+		return PTR_ERR(hwpt);
+
+	if (!hwpt->user_managed) {
+		rc = -EINVAL;
+		goto out_put_hwpt;
+	}
+
+	rc = hwpt->domain->ops->cache_invalidate_user(hwpt->domain, &data);
+out_put_hwpt:
+	iommufd_put_object(&hwpt->obj);
+	return rc;
+}
