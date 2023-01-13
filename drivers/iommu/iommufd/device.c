@@ -301,6 +301,9 @@ static int iommufd_device_attach_ioas(struct iommufd_device *idev,
 	struct io_pagetable *iopt;
 	int rc;
 
+	if (hwpt->parent)
+		hwpt = hwpt->parent;
+
 	iopt = &hwpt->ioas->iopt;
 
 	rc = iopt_table_enforce_group_resv_regions(iopt, idev->dev,
@@ -321,6 +324,8 @@ out_iova:
 static void iommufd_device_detach_ioas(struct iommufd_device *idev,
 				       struct iommufd_hw_pagetable *hwpt)
 {
+	if (hwpt->parent)
+		hwpt = hwpt->parent;
 	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev);
 }
 
