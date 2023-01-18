@@ -707,11 +707,22 @@ int iommufd_access_set_ioas(struct iommufd_access *access, u32 ioas_id)
 		iommufd_ref_to_users(obj);
 	}
 
+	/*
+	 * Set ioas to NULL to block any further iommufd_access_pin_pages().
+	 * iommufd_access_unpin_pages() can continue using access->ioas_unpin.
+	 */
+	access->ioas = NULL;
+
+	mutex_unlock(&access->ioas_lock);
+	access->ops->unmap(access->data, 0, ULONG_MAX);
+	mutex_lock(&access->ioas_lock);
+
 	if (cur_ioas) {
 		iopt_remove_access(&cur_ioas->iopt, access);
 		refcount_dec(&cur_ioas->obj.users);
 	}
 
+	access->ioas_unpin = new_ioas;
 	access->ioas = new_ioas;
 	mutex_unlock(&access->ioas_lock);
 
@@ -785,11 +796,11 @@ void iommufd_access_unpin_pages(struct iommufd_access *access,
 		return;
 
 	mutex_lock(&access->ioas_lock);
-	if (!access->ioas) {
+	if (!access->ioas_unpin) {
 		mutex_unlock(&access->ioas_lock);
 		return;
 	}
-	iopt = &access->ioas->iopt;
+	iopt = &access->ioas_unpin->iopt;
 
 	down_read(&iopt->iova_rwsem);
 	iopt_for_each_contig_area(&iter, area, iopt, iova, last_iova)
