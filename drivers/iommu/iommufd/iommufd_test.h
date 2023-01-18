@@ -13,6 +13,7 @@ enum {
 	IOMMU_TEST_OP_MD_CHECK_MAP,
 	IOMMU_TEST_OP_MD_CHECK_REFS,
 	IOMMU_TEST_OP_CREATE_ACCESS,
+	IOMMU_TEST_OP_ACCESS_SET_IOAS,
 	IOMMU_TEST_OP_DESTROY_ACCESS_PAGES,
 	IOMMU_TEST_OP_ACCESS_PAGES,
 	IOMMU_TEST_OP_ACCESS_RW,
@@ -66,6 +67,9 @@ struct iommu_test_cmd {
 			__u32 out_access_fd;
 			__u32 flags;
 		} create_access;
+		struct {
+			__u32 ioas_id;
+		} access_set_ioas;
 		struct {
 			__u32 access_pages_id;
 		} destroy_access_pages;
