@@ -732,7 +732,7 @@ static struct selftest_access *iommufd_test_alloc_access(void)
 }
 
 static int iommufd_test_create_access(struct iommufd_ucmd *ucmd,
-				      unsigned int ioas_id, unsigned int flags)
+				      unsigned int flags)
 {
 	struct iommu_test_cmd *cmd = ucmd->cmd;
 	struct selftest_access *staccess;
@@ -763,9 +763,6 @@ static int iommufd_test_create_access(struct iommufd_ucmd *ucmd,
 		rc = PTR_ERR(access);
 		goto out_put_fdno;
 	}
-	rc = iommufd_access_set_ioas(access, ioas_id);
-	if (rc)
-		goto out_destroy;
 	cmd->create_access.out_access_fd = fdno;
 	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
 	if (rc)
@@ -780,6 +777,22 @@ out_destroy:
 out_put_fdno:
 	put_unused_fd(fdno);
 out_free_staccess:
+	fput(staccess->file);
+	return rc;
+}
+
+static int iommufd_test_access_set_ioas(struct iommufd_ucmd *ucmd,
+					unsigned int access_id,
+					unsigned int ioas_id)
+{
+	struct selftest_access *staccess;
+	int rc;
+
+	staccess = iommufd_access_get(access_id);
+	if (IS_ERR(staccess))
+		return PTR_ERR(staccess);
+
+	rc = iommufd_access_set_ioas(staccess->access, ioas_id);
 	fput(staccess->file);
 	return rc;
 }
@@ -997,8 +1010,11 @@ int iommufd_test(struct iommufd_ucmd *ucmd)
 			ucmd, u64_to_user_ptr(cmd->check_refs.uptr),
 			cmd->check_refs.length, cmd->check_refs.refs);
 	case IOMMU_TEST_OP_CREATE_ACCESS:
-		return iommufd_test_create_access(ucmd, cmd->id,
+		return iommufd_test_create_access(ucmd,
 						  cmd->create_access.flags);
+	case IOMMU_TEST_OP_ACCESS_SET_IOAS:
+		return iommufd_test_access_set_ioas(
+			ucmd, cmd->id, cmd->access_set_ioas.ioas_id);
 	case IOMMU_TEST_OP_ACCESS_PAGES:
 		return iommufd_test_access_pages(
 			ucmd, cmd->id, cmd->access_pages.iova,

@@ -117,13 +117,31 @@ static int _test_cmd_hwpt_alloc(int fd, __u32 device_id, __u32 pt_id,
 #define test_cmd_hwpt_alloc(device_id, pt_id, hwpt_id) \
 	ASSERT_EQ(0, _test_cmd_hwpt_alloc(self->fd, device_id, pt_id, hwpt_id))
 
+static int _test_cmd_access_set_ioas(int fd, __u32 access_id,
+				     unsigned int ioas_id)
+{
+	struct iommu_test_cmd cmd = {
+		.size = sizeof(cmd),
+		.op = IOMMU_TEST_OP_ACCESS_SET_IOAS,
+		.id = access_id,
+		.access_set_ioas = { .ioas_id = ioas_id },
+	};
+	int ret;
+
+	ret = ioctl(fd, IOMMU_TEST_CMD, &cmd);
+	if (ret)
+		return ret;
+	return 0;
+}
+#define test_cmd_access_set_ioas(access_id, ioas_id) \
+	ASSERT_EQ(0, _test_cmd_access_set_ioas(self->fd, access_id, ioas_id))
+
 static int _test_cmd_create_access(int fd, unsigned int ioas_id,
 				   __u32 *access_id, unsigned int flags)
 {
 	struct iommu_test_cmd cmd = {
 		.size = sizeof(cmd),
 		.op = IOMMU_TEST_OP_CREATE_ACCESS,
-		.id = ioas_id,
 		.create_access = { .flags = flags },
 	};
 	int ret;
@@ -132,7 +150,7 @@ static int _test_cmd_create_access(int fd, unsigned int ioas_id,
 	if (ret)
 		return ret;
 	*access_id = cmd.create_access.out_access_fd;
-	return 0;
+	return _test_cmd_access_set_ioas(fd, *access_id, ioas_id);
 }
 #define test_cmd_create_access(ioas_id, access_id, flags)                  \
 	ASSERT_EQ(0, _test_cmd_create_access(self->fd, ioas_id, access_id, \
