@@ -396,6 +396,8 @@ enum iommu_pgtbl_data_type {
  * @out_device_type: Output the underlying iommu hardware type, it is
  *		   one of enum iommu_device_data_type.
  * @__reserved: Must be 0
+ * @out_pgtbl_type_bitmap: Output the supported page table type. Each
+ *			   bit is defined in enum iommu_pgtbl_data_type.
  *
  * Query the hardware iommu capability for given device which has been
  * bound to iommufd. @data_len is set to be the size of the buffer to
@@ -408,6 +410,10 @@ enum iommu_pgtbl_data_type {
  *
  * The @out_device_type will be filled if the ioctl succeeds. It would
  * be used to decode the data filled in the buffer pointed by @data_ptr.
+ *
+ * @out_pgtbl_type_bitmap tells the userspace the supported page tables.
+ * This differs per @out_device_type. Userspace should check it before
+ * allocating hw_pagetable in userspace.
  */
 struct iommu_device_info {
 	__u32 size;
@@ -417,6 +423,7 @@ struct iommu_device_info {
 	__aligned_u64 data_ptr;
 	__u32 out_device_type;
 	__u32 __reserved;
+	__aligned_u64 out_pgtbl_type_bitmap;
 };
 #define IOMMU_DEVICE_GET_INFO _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEVICE_GET_INFO)
 
