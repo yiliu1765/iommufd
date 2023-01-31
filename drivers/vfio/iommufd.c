@@ -149,14 +149,18 @@ int vfio_iommufd_emulated_bind(struct vfio_device *vdev,
 }
 EXPORT_SYMBOL_GPL(vfio_iommufd_emulated_bind);
 
+static void __vfio_iommufd_access_destroy(struct vfio_device *vdev)
+{
+	iommufd_access_destroy(vdev->iommufd_access);
+	vdev->iommufd_access = NULL;
+}
+
 void vfio_iommufd_emulated_unbind(struct vfio_device *vdev)
 {
 	lockdep_assert_held(&vdev->dev_set->lock);
 
-	if (vdev->iommufd_access) {
-		iommufd_access_destroy(vdev->iommufd_access);
-		vdev->iommufd_access = NULL;
-	}
+	if (vdev->iommufd_access)
+		__vfio_iommufd_access_destroy(vdev);
 	iommufd_ctx_put(vdev->iommufd_ictx);
 	vdev->iommufd_ictx = NULL;
 }
@@ -168,6 +172,12 @@ int vfio_iommufd_emulated_attach_ioas(struct vfio_device *vdev, u32 *pt_id)
 
 	lockdep_assert_held(&vdev->dev_set->lock);
 
+	if (!vdev->iommufd_ictx)
+		return -EINVAL;
+
+	if (vdev->iommufd_access)
+		return -EBUSY;
+
 	user = iommufd_access_create(vdev->iommufd_ictx, *pt_id, &vfio_user_ops,
 				     vdev);
 	if (IS_ERR(user))
@@ -176,3 +186,14 @@ int vfio_iommufd_emulated_attach_ioas(struct vfio_device *vdev, u32 *pt_id)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(vfio_iommufd_emulated_attach_ioas);
+
+void vfio_iommufd_emulated_detach_ioas(struct vfio_device *vdev)
+{
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (!vdev->iommufd_ictx || !vdev->iommufd_access)
+		return;
+
+	__vfio_iommufd_access_destroy(vdev);
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_emulated_detach_ioas);
