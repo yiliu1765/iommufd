@@ -311,22 +311,30 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 	sobj->idev.mock_dev.bus = &mock_bus;
 	sobj->idev.mock_dev.iommu = &iommu;
 
-	hwpt = iommufd_device_selftest_attach(ucmd->ictx, ioas,
-					      &sobj->idev.mock_dev);
+	hwpt = iommufd_hw_pagetable_alloc(ucmd->ictx, ioas,
+					  &sobj->idev.mock_dev);
 	if (IS_ERR(hwpt)) {
 		rc = PTR_ERR(hwpt);
-		goto out_sobj;
+		goto out_unlock;
 	}
 	sobj->idev.hwpt = hwpt;
+
+	rc = iommufd_device_selftest_attach(ucmd->ictx, hwpt);
+	if (rc)
+		goto out_free_hwpt;
 
 	/* Userspace must destroy both of these IDs to destroy the object */
 	cmd->mock_domain.out_hwpt_id = hwpt->obj.id;
 	cmd->mock_domain.out_device_id = sobj->obj.id;
 	iommufd_object_finalize(ucmd->ictx, &sobj->obj);
+	iommufd_object_finalize(ucmd->ictx, &hwpt->obj);
 	iommufd_put_object(&ioas->obj);
 	return iommufd_ucmd_respond(ucmd, sizeof(*cmd));
 
-out_sobj:
+out_free_hwpt:
+	iommufd_object_abort_and_destroy(ucmd->ictx, &hwpt->obj);
+out_unlock:
+	mutex_unlock(&ioas->mutex);
 	iommufd_object_abort(ucmd->ictx, &sobj->obj);
 out_ioas:
 	iommufd_put_object(&ioas->obj);
