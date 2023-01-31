@@ -71,14 +71,18 @@ int vfio_iommufd_physical_bind(struct vfio_device *vdev,
 }
 EXPORT_SYMBOL_GPL(vfio_iommufd_physical_bind);
 
+static void __vfio_iommufd_detach(struct vfio_device *vdev)
+{
+	iommufd_device_detach(vdev->iommufd_device);
+	vdev->iommufd_attached = false;
+}
+
 void vfio_iommufd_physical_unbind(struct vfio_device *vdev)
 {
 	lockdep_assert_held(&vdev->dev_set->lock);
 
-	if (vdev->iommufd_attached) {
-		iommufd_device_detach(vdev->iommufd_device);
-		vdev->iommufd_attached = false;
-	}
+	if (vdev->iommufd_attached)
+		__vfio_iommufd_detach(vdev);
 	iommufd_device_unbind(vdev->iommufd_device);
 	vdev->iommufd_device = NULL;
 }
@@ -88,6 +92,14 @@ int vfio_iommufd_physical_attach_ioas(struct vfio_device *vdev, u32 *pt_id)
 {
 	int rc;
 
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (!vdev->iommufd_device)
+		return -EINVAL;
+
+	if (vdev->iommufd_attached)
+		return -EBUSY;
+
 	rc = iommufd_device_attach(vdev->iommufd_device, pt_id);
 	if (rc)
 		return rc;
@@ -95,6 +107,17 @@ int vfio_iommufd_physical_attach_ioas(struct vfio_device *vdev, u32 *pt_id)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(vfio_iommufd_physical_attach_ioas);
+
+void vfio_iommufd_physical_detach_ioas(struct vfio_device *vdev)
+{
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (!vdev->iommufd_device || !vdev->iommufd_attached)
+		return;
+
+	__vfio_iommufd_detach(vdev);
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_physical_detach_ioas);
 
 /*
  * The emulated standard ops mean that vfio_device is going to use the
