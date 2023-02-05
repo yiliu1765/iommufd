@@ -1543,6 +1543,8 @@ int vfio_pin_pages(struct vfio_device *device, dma_addr_t iova,
 
 		if (iova > ULONG_MAX)
 			return -EINVAL;
+		if (!device->ops->dma_unmap)
+			return -EINVAL;
 		/*
 		 * VFIO ignores the sub page offset, npages is from the start of
 		 * a PAGE_SIZE chunk of IOVA. The caller is expected to recover
@@ -1579,6 +1581,8 @@ void vfio_unpin_pages(struct vfio_device *device, dma_addr_t iova, int npage)
 	}
 	if (device->iommufd_access) {
 		if (WARN_ON(iova > ULONG_MAX))
+			return;
+		if (!device->ops->dma_unmap)
 			return;
 		iommufd_access_unpin_pages(device->iommufd_access,
 					   ALIGN_DOWN(iova, PAGE_SIZE),
