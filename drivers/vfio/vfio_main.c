@@ -37,6 +37,7 @@
 #include <linux/interval_tree.h>
 #include <linux/iova_bitmap.h>
 #include <linux/iommufd.h>
+#include <uapi/linux/iommufd.h>
 #include "vfio.h"
 
 #define DRIVER_VERSION	"0.3"
@@ -442,16 +443,41 @@ static int vfio_device_first_open(struct vfio_device_file *df,
 {
 	struct vfio_device *device = df->device;
 	struct iommufd_ctx *iommufd = df->iommufd;
-	int ret;
+	int ret = 0;
 
 	lockdep_assert_held(&device->dev_set->lock);
+
+	/* df->iommufd and df->noiommu should be exclusive */
+	if (WARN_ON(iommufd && df->noiommu))
+		return -EINVAL;
 
 	if (!try_module_get(device->dev->driver->owner))
 		return -ENODEV;
 
+	/*
+	 * For group path, iommufd pointer is NULL when comes into this
+	 * helper. Its noiommu support is in container.c.
+	 *
+	 * For iommufd compat mode, iommufd pointer here is a valid value.
+	 * Its noiommu support is supposed to be in vfio_iommufd_bind().
+	 *
+	 * For device cdev path, iommufd pointer here is a valid value for
+	 * normal cases, but it is NULL if it's noiommu. The reason is
+	 * that userspace uses iommufd==-1 to indicate noiommu mode in this
+	 * path. So caller of this helper will pass in a NULL iommufd
+	 * pointer. To differentiate it from the group path which also
+	 * passes NULL iommufd pointer in, df->noiommu is used. For cdev
+	 * noiommu, df->noiommu would be set to mark noiommu case for cdev
+	 * path.
+	 *
+	 * So if df->noiommu is set then this helper just goes ahead to
+	 * open device. If not, it depends on if iommufd pointer is NULL
+	 * to handle the group path, iommufd compat mode, normal cases in
+	 * the cdev path.
+	 */
 	if (iommufd)
 		ret = vfio_iommufd_bind(device, iommufd, dev_id, pt_id);
-	else
+	else if (!df->noiommu)
 		ret = vfio_device_group_use_iommu(device);
 	if (ret)
 		goto err_module_put;
@@ -466,7 +492,7 @@ static int vfio_device_first_open(struct vfio_device_file *df,
 err_unuse_iommu:
 	if (iommufd)
 		vfio_iommufd_unbind(device);
-	else
+	else if (!df->noiommu)
 		vfio_device_group_unuse_iommu(device);
 err_module_put:
 	module_put(device->dev->driver->owner);
@@ -484,7 +510,7 @@ static void vfio_device_last_close(struct vfio_device_file *df)
 		device->ops->close_device(device);
 	if (iommufd)
 		vfio_iommufd_unbind(device);
-	else
+	else if (!df->noiommu)
 		vfio_device_group_unuse_iommu(device);
 	module_put(device->dev->driver->owner);
 }
@@ -588,6 +614,8 @@ static int vfio_device_fops_release(struct inode *inode, struct file *filep)
 	 */
 	if (!df->is_cdev_device)
 		vfio_device_group_close(df);
+	else
+		vfio_device_cdev_close(df);
 
 	vfio_device_put_registration(device);
 
@@ -1162,6 +1190,9 @@ static long vfio_device_fops_unl_ioctl(struct file *filep,
 	bool access;
 	int ret;
 
+	if (cmd == VFIO_DEVICE_BIND_IOMMUFD)
+		return vfio_device_ioctl_bind_iommufd(df, arg);
+
 	/* Paired with smp_store_release() in vfio_device_open() */
 	access = smp_load_acquire(&df->access_granted);
 	if (!access)
@@ -1174,6 +1205,14 @@ static long vfio_device_fops_unl_ioctl(struct file *filep,
 	switch (cmd) {
 	case VFIO_DEVICE_FEATURE:
 		ret = vfio_ioctl_device_feature(device, (void __user *)arg);
+		break;
+
+	case VFIO_DEVICE_ATTACH_IOMMUFD_PT:
+		ret = vfio_ioctl_device_attach(df, (void __user *)arg);
+		break;
+
+	case VFIO_DEVICE_DETACH_IOMMUFD_PT:
+		ret = vfio_ioctl_device_detach(df, (void __user *)arg);
 		break;
 
 	default:
