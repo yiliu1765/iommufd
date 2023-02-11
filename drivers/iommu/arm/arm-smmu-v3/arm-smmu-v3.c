@@ -2880,9 +2880,65 @@ static void arm_smmu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
 	arm_smmu_sva_remove_dev_pasid(domain, dev, pasid);
 }
 
+static void arm_smmu_invalidate_cache_user(struct iommu_domain *domain,
+					   void *user_data)
+{
+	struct iommu_hwpt_invalidate_arm_smmuv3 *inv_info = user_data;
+	struct arm_smmu_cmdq_ent cmd = { .opcode = inv_info->opcode };
+	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
+	size_t granule_size = inv_info->granule_size;
+	unsigned long iova = 0;
+	size_t size = 0;
+	int ssid = 0;
+
+	if (!smmu || !smmu_domain->s2 || domain->type != IOMMU_DOMAIN_NESTED)
+		return;
+
+	switch (inv_info->opcode) {
+	case CMDQ_OP_CFGI_CD:
+	case CMDQ_OP_CFGI_CD_ALL:
+		return arm_smmu_sync_cd(smmu_domain, inv_info->ssid, true);
+	case CMDQ_OP_TLBI_NH_VA:
+		cmd.tlbi.asid = inv_info->asid;
+		fallthrough;
+	case CMDQ_OP_TLBI_NH_VAA:
+		if (!granule_size || !(granule_size & smmu->pgsize_bitmap) ||
+		    granule_size & ~(1ULL << __ffs(granule_size)))
+			return;
+
+		iova = inv_info->range.start;
+		size = inv_info->range.last - inv_info->range.start + 1;
+		if (!size)
+			return;
+
+		cmd.tlbi.vmid = smmu_domain->s2->s2_cfg.vmid;
+		cmd.tlbi.leaf = inv_info->flags & IOMMU_SMMUV3_CMDQ_TLBI_VA_LEAF;
+		__arm_smmu_tlb_inv_range(&cmd, iova, size, granule_size, smmu_domain);
+		break;
+	case CMDQ_OP_TLBI_NH_ASID:
+		cmd.tlbi.asid = inv_info->asid;
+		fallthrough;
+	case CMDQ_OP_TLBI_NH_ALL:
+		cmd.tlbi.vmid = smmu_domain->s2->s2_cfg.vmid;
+		arm_smmu_cmdq_issue_cmd_with_sync(smmu, &cmd);
+		break;
+	case CMDQ_OP_ATC_INV:
+		ssid = inv_info->ssid;
+		iova = inv_info->range.start;
+		size = inv_info->range.last - inv_info->range.start + 1;
+		break;
+	default:
+		return;
+	}
+
+	arm_smmu_atc_inv_domain(smmu_domain, ssid, iova, size);
+}
+
 static const struct iommu_domain_ops arm_smmu_nested_domain_ops = {
 	.attach_dev		= arm_smmu_attach_dev,
 	.free			= arm_smmu_domain_free,
+	.iotlb_sync_user	= arm_smmu_invalidate_cache_user,
 };
 
 static struct iommu_domain *
