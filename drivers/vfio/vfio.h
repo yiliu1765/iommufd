@@ -241,6 +241,8 @@ int vfio_df_iommufd_bind(struct vfio_device_file *df);
 void vfio_df_iommufd_unbind(struct vfio_device_file *df);
 int vfio_iommufd_compat_attach_ioas(struct vfio_device *device,
 				    struct iommufd_ctx *ictx);
+int vfio_device_attach_pt(struct vfio_device *vdev, u32 *pt_id);
+void vfio_device_detach_pt(struct vfio_device *vdev);
 #else
 static inline bool
 vfio_iommufd_device_has_compat_ioas(struct vfio_device *device,
@@ -282,6 +284,10 @@ int vfio_device_fops_cdev_open(struct inode *inode, struct file *filep);
 void vfio_df_cdev_close(struct vfio_device_file *df);
 long vfio_df_ioctl_bind_iommufd(struct vfio_device_file *df,
 				struct vfio_device_bind_iommufd __user *arg);
+int vfio_df_ioctl_attach_pt(struct vfio_device_file *df,
+			    struct vfio_device_attach_iommufd_pt __user *arg);
+int vfio_df_ioctl_detach_pt(struct vfio_device_file *df,
+			    struct vfio_device_detach_iommufd_pt __user *arg);
 int vfio_cdev_init(struct class *device_class);
 void vfio_cdev_cleanup(void);
 #else
@@ -311,6 +317,18 @@ static inline void vfio_df_cdev_close(struct vfio_device_file *df)
 
 static inline long vfio_df_ioctl_bind_iommufd(struct vfio_device_file *df,
 					      struct vfio_device_bind_iommufd __user *arg)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int vfio_df_ioctl_attach_pt(struct vfio_device_file *df,
+					  struct vfio_device_attach_iommufd_pt __user *arg)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int vfio_df_ioctl_detach_pt(struct vfio_device_file *df,
+					  struct vfio_device_detach_iommufd_pt __user *arg)
 {
 	return -EOPNOTSUPP;
 }

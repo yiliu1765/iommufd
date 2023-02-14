@@ -103,6 +103,24 @@ void vfio_df_iommufd_unbind(struct vfio_device_file *df)
 		vdev->ops->unbind_iommufd(vdev);
 }
 
+int vfio_device_attach_pt(struct vfio_device *vdev, u32 *pt_id)
+{
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (vfio_device_is_noiommu(vdev))
+		return 0;
+
+	return vdev->ops->attach_ioas(vdev, pt_id);
+}
+
+void vfio_device_detach_pt(struct vfio_device *vdev)
+{
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (!vfio_device_is_noiommu(vdev))
+		vdev->ops->detach_ioas(vdev);
+}
+
 struct iommufd_ctx *vfio_iommufd_device_ictx(struct vfio_device *vdev)
 {
 	if (vdev->iommufd_device)
