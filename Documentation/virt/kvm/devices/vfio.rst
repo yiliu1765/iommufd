@@ -39,3 +39,8 @@ KVM_DEV_VFIO_GROUP attributes:
 	- @groupfd is a file descriptor for a VFIO group;
 	- @tablefd is a file descriptor for a TCE table allocated via
 	  KVM_CREATE_SPAPR_TCE.
+
+::
+
+The GROUP_ADD operation below should be invoked before vfio_device's
+open_device op which is called in the ioctl VFIO_GROUP_GET_DEVICE_FD.
