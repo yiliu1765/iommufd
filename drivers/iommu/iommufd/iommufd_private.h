@@ -267,6 +267,7 @@ struct iommufd_group {
 	struct iommu_group *group;
 	struct iommufd_hw_pagetable *hwpt;
 	unsigned int devices;
+	phys_addr_t sw_msi_start;
 };
 
 /*

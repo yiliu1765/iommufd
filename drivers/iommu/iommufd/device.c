@@ -74,6 +74,7 @@ static struct iommufd_group *iommufd_get_group(struct iommufd_ctx *ictx,
 
 	kref_init(&new_igroup->ref);
 	mutex_init(&new_igroup->lock);
+	new_igroup->sw_msi_start = PHYS_ADDR_MAX;
 	/* group reference moves into new_igroup */
 	new_igroup->group = group;
 
@@ -238,9 +239,9 @@ void iommufd_device_unbind(struct iommufd_device *idev)
 EXPORT_SYMBOL_NS_GPL(iommufd_device_unbind, IOMMUFD);
 
 static int iommufd_device_setup_msi(struct iommufd_device *idev,
-				    struct iommufd_hw_pagetable *hwpt,
-				    phys_addr_t sw_msi_start)
+				    struct iommufd_hw_pagetable *hwpt)
 {
+	phys_addr_t sw_msi_start = idev->igroup->sw_msi_start;
 	int rc;
 
 	/*
@@ -273,7 +274,6 @@ static int iommufd_device_setup_msi(struct iommufd_device *idev,
 int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
 				struct iommufd_device *idev)
 {
-	phys_addr_t sw_msi_start = PHYS_ADDR_MAX;
 	int rc;
 
 	lockdep_assert_held(&idev->igroup->lock);
@@ -310,12 +310,13 @@ int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
 		return 0;
 	}
 
-	rc = iopt_table_enforce_group_resv_regions(
-		&hwpt->ioas->iopt, idev->igroup->group, &sw_msi_start);
+	rc = iopt_table_enforce_group_resv_regions(&hwpt->ioas->iopt,
+						   idev->igroup->group,
+						   &idev->igroup->sw_msi_start);
 	if (rc)
 		return rc;
 
-	rc = iommufd_device_setup_msi(idev, hwpt, sw_msi_start);
+	rc = iommufd_device_setup_msi(idev, hwpt);
 	if (rc)
 		goto err_unresv;
 
