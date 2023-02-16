@@ -1163,7 +1163,6 @@ void iopt_remove_access(struct io_pagetable *iopt,
 
 /* Narrow the valid_iova_itree to include reserved ranges from a group. */
 int iopt_table_enforce_group_resv_regions(struct io_pagetable *iopt,
-					  struct device *device,
 					  struct iommu_group *group,
 					  phys_addr_t *sw_msi_start)
 {
@@ -1191,7 +1190,7 @@ int iopt_table_enforce_group_resv_regions(struct io_pagetable *iopt,
 		}
 
 		rc = iopt_reserve_iova(iopt, resv->start,
-				       resv->length - 1 + resv->start, device);
+				       resv->length - 1 + resv->start, group);
 		if (rc)
 			goto out_reserved;
 	}
@@ -1206,7 +1205,7 @@ int iopt_table_enforce_group_resv_regions(struct io_pagetable *iopt,
 	goto out_free_resv;
 
 out_reserved:
-	__iopt_remove_reserved_iova(iopt, device);
+	__iopt_remove_reserved_iova(iopt, group);
 out_free_resv:
 	list_for_each_entry_safe(resv, tmp, &group_resv_regions, list)
 		kfree(resv);

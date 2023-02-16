@@ -77,7 +77,6 @@ int iopt_table_add_domain(struct io_pagetable *iopt,
 void iopt_table_remove_domain(struct io_pagetable *iopt,
 			      struct iommu_domain *domain);
 int iopt_table_enforce_group_resv_regions(struct io_pagetable *iopt,
-					  struct device *device,
 					  struct iommu_group *group,
 					  phys_addr_t *sw_msi_start);
 int iopt_set_allow_iova(struct io_pagetable *iopt,

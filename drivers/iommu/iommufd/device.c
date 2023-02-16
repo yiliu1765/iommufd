@@ -298,9 +298,20 @@ int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
 		}
 	}
 
-	rc = iopt_table_enforce_group_resv_regions(&hwpt->ioas->iopt, idev->dev,
-						   idev->igroup->group,
-						   &sw_msi_start);
+	/*
+	 * The first device in the group to be attached will do all the work
+	 * to setup the hwpt and ioas. Every other device re-uses it through
+	 * the shared group attachment. Users are allowed/expected to attach
+	 * every device in the group to the same hwpt, that just turns into
+	 * a NOP.
+	 */
+	if (idev->igroup->devices) {
+		idev->igroup->devices++;
+		return 0;
+	}
+
+	rc = iopt_table_enforce_group_resv_regions(
+		&hwpt->ioas->iopt, idev->igroup->group, &sw_msi_start);
 	if (rc)
 		return rc;
 
@@ -308,22 +319,15 @@ int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
 	if (rc)
 		goto err_unresv;
 
-	/*
-	 * Only attach to the group once for the first device that is in the
-	 * group. All the other devices will follow this attachment.
-	 * The user can attach every device individually as well.
-	 */
-	if (!idev->igroup->devices) {
-		rc = iommu_attach_group(hwpt->domain, idev->igroup->group);
-		if (rc)
-			goto err_unresv;
-		idev->igroup->hwpt = hwpt;
-		refcount_inc(&hwpt->obj.users);
-	}
+	rc = iommu_attach_group(hwpt->domain, idev->igroup->group);
+	if (rc)
+		goto err_unresv;
+	idev->igroup->hwpt = hwpt;
+	refcount_inc(&hwpt->obj.users);
 	idev->igroup->devices++;
 	return 0;
 err_unresv:
-	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev);
+	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->igroup->group);
 	return rc;
 }
 
@@ -339,7 +343,7 @@ iommufd_hw_pagetable_detach(struct iommufd_device *idev)
 		iommu_detach_group(hwpt->domain, idev->igroup->group);
 		idev->igroup->hwpt = NULL;
 	}
-	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev);
+	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->igroup->group);
 	return hwpt;
 }
 
