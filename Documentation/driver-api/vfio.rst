@@ -239,6 +239,96 @@ group and can access them as follows::
 	/* Gratuitous device reset and go... */
 	ioctl(device, VFIO_DEVICE_RESET);
 
+IOMMUFD
+-------
+
+As chapter "VFIO and IOMMUFD" of Documentation/userspace-api/iommufd.rst,
+VFIO device can be connected to iommufd in compatible way or by the new
+device-centric user API. The compatible way aims for on par with the existing
+VFIO type1. While the new device-centric user API is for future IOMMU
+features like nested translation [5], PASID [6] and etc.
+
+VFIO Device cdev FD
+-------------------
+
+User gets device fd via VFIO_GROUP_GET_DEVICE_FD in traditional way.
+With the adoption of iommufd, VFIO also provides character device for
+registered vfio-devices. User gets cdev fd for devices by opening such
+character device. It is enabled by configuring CONFIG_VFIO_DEVICE_CDEV=y.
+The new character devices are /dev/vfio/devices/vfioX, where the "X"
+is the number allocated by VFIO, and unique across devices. Due to
+implementation gap, SPAPR does not support iommufd yet. Hence, it cannot
+use cdev fd for now as cdev fd needs work with iommufd.
+
+Device cdev FD Example
+----------------------
+
+Assume user wants to access PCI device 0000:6a:01.0::
+
+	$ ls /sys/bus/pci/devices/0000:6a:01.0/vfio-dev/
+	vfio0
+
+By searching vfio-dev folder, user should get the vfioX, here "X" is 0.
+So the vfioX file for PCI device 0000:6a:01.0 is::
+
+	$ ls -l /dev/vfio/devices/vfio0
+	crw------- 1 root root 511, 0 Feb 16 01:22 /dev/vfio/devices/vfio0
+
+Provide the user with access to the device if unprivileged operation is
+desired::
+
+	$ chown user:user /dev/vfio/devices/vfio0
+
+User could get cdev fd by::
+
+	cdev_fd = open("/dev/vfio/devices/vfio0", O_RDWR);
+
+From vfio-dev, user can also get the major and minor number of
+/dev/vfio/devices/vfio0. It can be used to get cdev fd as well by opening
+/dev/char/$major:$minor::
+
+	$ ls /sys/bus/pci/devices/0000:6a:01.0/vfio-dev/vfio0
+	dev  device  power  subsystem  uevent
+
+	$ cat /sys/bus/pci/devices/0000:6a:01.0/vfio-dev/vfio0/dev
+	511:0
+
+	ls -l /dev/char/511\:0
+	lrwxrwxrwx 1 root root 21 Feb 16 01:22 /dev/char/511:0 -> ../vfio/devices/vfio0
+
+	cdev_fd = open("/dev/char/511:0", O_RDWR);
+
+After getting cdev_fd, user needs to bind it to an iommufd, and also
+attach device to IOAS::
+
+	struct iommu_ioas_alloc alloc_data  = {
+		.size = sizeof(alloc_data),
+		.flags = 0,
+	};
+	struct vfio_device_bind_iommufd bind = {
+		.argsz = sizeof(bind),
+		.flags = 0,
+	};
+	struct vfio_device_attach_iommufd_pt attach_data = {
+		.argsz = sizeof(attach_data),
+		.flags = 0,
+	};
+
+	iommufd = open("/dev/iommu", O_RDWR);
+
+	bind.iommufd = iommufd;
+	ioctl(cdev_fd, VFIO_DEVICE_BIND_IOMMUFD, &bind);
+
+	ioctl(iommufd, IOMMU_IOAS_ALLOC, &alloc_data);
+	attach_data.pt_id = alloc_data.out_ioas_id;
+	ioctl(cdev_fd, VFIO_DEVICE_ATTACH_IOMMUFD_PT, &attach_data);
+
+	After above operations, user can go ahead to do below operations
+	mentioned in chapter "VFIO Usage Example".
+
+	/* Test and setup the device */
+	/* Gratuitous device reset and go... */
+
 VFIO User API
 -------------------------------------------------------------------------------
 
@@ -566,3 +656,11 @@ This implementation has some specifics:
 				\-0d.1
 
 	00:1e.0 PCI bridge: Intel Corporation 82801 PCI Bridge (rev 90)
+
+.. [5] Nested translation is an IOMMU feature which supports two stages
+   address translations. This improves the address translation in IOMMU
+   virtualization.
+
+.. [6] PASID stands for Process Address Space ID, it is an extension in PCI
+   Express. It is a basic requirement for Scalable IOV and Shared Virtual
+   Addressing.
