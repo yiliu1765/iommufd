@@ -1210,6 +1210,25 @@ bool vfio_file_is_valid(struct file *file)
 EXPORT_SYMBOL_GPL(vfio_file_is_valid);
 
 /**
+ * vfio_file_is_device_opened - True if the file is fully opened
+ * @file: VFIO group file or VFIO device file
+ */
+bool vfio_file_is_device_opened(struct file *file)
+{
+	struct vfio_device *device;
+
+	if (vfio_group_from_file(file))
+		return true;
+
+	device = vfio_device_from_file(file);
+	if (device)
+		return READ_ONCE(device->open_count);
+
+	return false;
+}
+EXPORT_SYMBOL_GPL(vfio_file_is_device_opened);
+
+/**
  * vfio_file_enforced_coherent - True if the DMA associated with the VFIO file
  *        is always CPU cache coherent
  * @file: VFIO group file or VFIO device file

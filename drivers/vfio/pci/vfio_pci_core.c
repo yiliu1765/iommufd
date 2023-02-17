@@ -1280,8 +1280,9 @@ static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
 
 	/*
 	 * We can't let userspace give us an arbitrarily large buffer to copy,
-	 * so verify how many we think there could be.  Note groups can have
-	 * multiple devices so one group per device is the max.
+	 * so verify how many we think there could be.  Note user may provide
+	 * a set of groups, group can have multiple devices so one group per
+	 * device is the max.
 	 */
 	ret = vfio_pci_for_each_slot_or_bus(vdev->pdev, vfio_pci_count_devs,
 					    &count, slot);
@@ -1308,7 +1309,7 @@ static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
 	}
 
 	/*
-	 * For each group_fd, get the group file, this ensures the group
+	 * For each fd, get the file, this ensures the group or device
 	 * is held across the reset.
 	 */
 	for (file_idx = 0; file_idx < hdr.count; file_idx++) {
@@ -1320,7 +1321,7 @@ static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
 		}
 
 		/* Ensure the FD is a vfio FD.*/
-		if (!vfio_file_is_valid(file)) {
+		if (!vfio_file_is_device_opened(file)) {
 			fput(file);
 			ret = -EINVAL;
 			break;
@@ -2430,7 +2431,7 @@ static int vfio_pci_dev_set_hot_reset(struct vfio_device_set *dev_set,
 	list_for_each_entry(cur_vma, &dev_set->device_list, vdev.dev_set_list) {
 		/*
 		 * Test whether all the affected devices are contained by the
-		 * set of groups provided by the user.
+		 * set of files provided by the user.
 		 */
 		if (!vfio_dev_in_groups(cur_vma, groups)) {
 			ret = -EINVAL;
