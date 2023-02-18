@@ -168,6 +168,7 @@ out_abort:
  */
 static const size_t iommufd_hwpt_alloc_data_size[] = {
 	[IOMMU_HWPT_TYPE_DEFAULT] = 0,
+	[IOMMU_HWPT_TYPE_VTD_S1] = sizeof(struct iommu_hwpt_intel_vtd),
 };
 
 int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
@@ -294,7 +295,9 @@ out_put_idev:
  * size of page table type specific invalidate_info, indexed by
  * enum iommu_hwpt_type.
  */
-static const size_t iommufd_hwpt_invalidate_info_size[] = {};
+static const size_t iommufd_hwpt_invalidate_info_size[] = {
+	[IOMMU_HWPT_TYPE_VTD_S1] = sizeof(struct iommu_hwpt_invalidate_intel_vtd),
+};
 
 int iommufd_hwpt_invalidate(struct iommufd_ucmd *ucmd)
 {
