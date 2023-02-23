@@ -1119,20 +1119,6 @@ static int iommu_group_device_count(struct iommu_group *group)
 	return ret;
 }
 
-static int __iommu_group_for_each_dev(struct iommu_group *group, void *data,
-				      int (*fn)(struct device *, void *))
-{
-	struct group_device *device;
-	int ret = 0;
-
-	list_for_each_entry(device, &group->devices, list) {
-		ret = fn(device->dev, data);
-		if (ret)
-			break;
-	}
-	return ret;
-}
-
 /**
  * iommu_group_for_each_dev - iterate over each device in the group
  * @group: the group
@@ -1147,10 +1133,15 @@ static int __iommu_group_for_each_dev(struct iommu_group *group, void *data,
 int iommu_group_for_each_dev(struct iommu_group *group, void *data,
 			     int (*fn)(struct device *, void *))
 {
-	int ret;
+	struct group_device *device;
+	int ret = 0;
 
 	mutex_lock(&group->mutex);
-	ret = __iommu_group_for_each_dev(group, data, fn);
+	list_for_each_entry(device, &group->devices, list) {
+		ret = fn(device->dev, data);
+		if (ret)
+			break;
+	}
 	mutex_unlock(&group->mutex);
 
 	return ret;
@@ -1727,9 +1718,9 @@ struct __group_domain_type {
 	unsigned int count;
 };
 
-static int probe_get_default_domain_type(struct device *dev, void *data)
+static int probe_get_default_domain_type(struct device *dev,
+					 struct __group_domain_type *gtype)
 {
-	struct __group_domain_type *gtype = data;
 	unsigned int type = iommu_get_def_domain_type(dev);
 
 	gtype->count++;
@@ -1768,8 +1759,8 @@ static int iommu_setup_default_domain(struct iommu_group *group)
 		return 0;
 
 	/* Ask for default domain requirements of all devices in the group */
-	__iommu_group_for_each_dev(group, &gtype,
-				   probe_get_default_domain_type);
+	list_for_each_entry(gdev, &group->devices, list)
+		probe_get_default_domain_type(gdev->dev, &gtype);
 
 	if (!gtype.type)
 		gtype.type = iommu_def_domain_type;
@@ -1816,20 +1807,12 @@ static int iommu_setup_default_domain(struct iommu_group *group)
 	return 0;
 }
 
-static int iommu_group_do_probe_finalize(struct device *dev, void *data)
+static void iommu_group_do_probe_finalize(struct device *dev)
 {
 	const struct iommu_ops *ops = dev_iommu_ops(dev);
 
 	if (ops->probe_finalize)
 		ops->probe_finalize(dev);
-
-	return 0;
-}
-
-static void __iommu_group_dma_finalize(struct iommu_group *group)
-{
-	__iommu_group_for_each_dev(group, group->default_domain,
-				   iommu_group_do_probe_finalize);
 }
 
 int bus_iommu_probe(struct bus_type *bus)
@@ -1848,6 +1831,8 @@ int bus_iommu_probe(struct bus_type *bus)
 		return ret;
 
 	list_for_each_entry_safe(group, next, &group_list, entry) {
+		struct group_device *gdev;
+
 		mutex_lock(&group->mutex);
 
 		/* Remove item from the list */
@@ -1857,7 +1842,15 @@ int bus_iommu_probe(struct bus_type *bus)
 		mutex_unlock(&group->mutex);
 		if (ret)
 			return ret;
-		__iommu_group_dma_finalize(group);
+
+		/*
+		 * Mis-locked because the ops->probe_finalize() call-back of
+		 * some IOMMU drivers calls arm_iommu_attach_device() which
+		 * in-turn might call back into IOMMU core code, where it tries
+		 * to take group->mutex, resulting in a deadlock.
+		 */
+		list_for_each_entry(gdev, &group->devices, list)
+			iommu_group_do_probe_finalize(gdev->dev);
 	}
 
 	return 0;
@@ -2981,7 +2974,7 @@ static int iommu_change_dev_def_domain(struct iommu_group *group,
 	mutex_unlock(&group->mutex);
 
 	/* Make sure dma_ops is appropriatley set */
-	iommu_group_do_probe_finalize(dev, group->default_domain);
+	iommu_group_do_probe_finalize(dev);
 	iommu_domain_free(prev_dom);
 	return 0;
 
