@@ -102,6 +102,10 @@ enum {
 	IOMMU_SET_DOMAIN_WITH_DEFERRED = 1 << 1,
 };
 
+static int __iommu_device_set_domain(struct iommu_group *group,
+				     struct device *dev,
+				     struct iommu_domain *new_domain,
+				     unsigned int flags);
 static int __iommu_group_set_domain_internal(struct iommu_group *group,
 					     struct iommu_domain *new_domain,
 					     unsigned int flags);
@@ -402,18 +406,11 @@ static bool iommu_is_attach_deferred(struct device *dev)
 	return false;
 }
 
-static int iommu_group_do_dma_first_attach(struct device *dev, void *data)
+static int iommu_group_do_dma_first_attach(struct iommu_group *group, struct device *dev)
 {
-	struct iommu_domain *domain = data;
-
-	lockdep_assert_held(&dev->iommu_group->mutex);
-
-	if (iommu_is_attach_deferred(dev)) {
-		dev->iommu->attach_deferred = 1;
-		return 0;
-	}
-
-	return __iommu_attach_device(domain, dev);
+	return __iommu_device_set_domain(
+		group, dev, group->domain,
+		group->owner ? 0 : IOMMU_SET_DOMAIN_WITH_DEFERRED);
 }
 
 int iommu_probe_device(struct device *dev)
@@ -446,7 +443,7 @@ int iommu_probe_device(struct device *dev)
 	 * attach the default domain.
 	 */
 	if (group->default_domain && !group->owner) {
-		ret = iommu_group_do_dma_first_attach(dev, group->default_domain);
+		ret = iommu_group_do_dma_first_attach(group, dev);
 		if (ret) {
 			mutex_unlock(&group->mutex);
 			iommu_group_put(group);
@@ -1049,7 +1046,7 @@ rename:
 	mutex_lock(&group->mutex);
 	list_add_tail(&device->list, &group->devices);
 	if (group->domain)
-		ret = iommu_group_do_dma_first_attach(dev, group->domain);
+		ret = iommu_group_do_dma_first_attach(group, dev);
 	mutex_unlock(&group->mutex);
 	if (ret)
 		goto err_put_group;
