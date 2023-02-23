@@ -441,7 +441,6 @@ int iommu_probe_device(struct device *dev)
 		 * checked.
 		 */
 		iommu_alloc_default_domain(group, dev);
-		group->domain = NULL;
 		if (group->default_domain)
 			ret = __iommu_group_set_domain_internal(
 				group, group->default_domain,
@@ -1674,8 +1673,6 @@ static int iommu_group_alloc_default_domain(struct bus_type *bus,
 		return -ENOMEM;
 
 	group->default_domain = dom;
-	if (!group->domain)
-		group->domain = dom;
 	return 0;
 }
 
@@ -1879,7 +1876,6 @@ int bus_iommu_probe(struct bus_type *bus)
 
 		iommu_group_create_direct_mappings(group);
 
-		group->domain = NULL;
 		ret = __iommu_group_set_domain_internal(
 			group, group->default_domain,
 			IOMMU_SET_DOMAIN_WITH_DEFERRED);
@@ -3015,7 +3011,6 @@ static int iommu_change_dev_def_domain(struct iommu_group *group,
 	if (ret)
 		goto free_new_domain;
 
-	group->domain = prev_dom;
 	ret = __iommu_group_set_domain(group, group->default_domain);
 	if (ret)
 		goto free_new_domain;
