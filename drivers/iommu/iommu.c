@@ -3000,11 +3000,10 @@ static int iommu_change_dev_def_domain(struct iommu_group *group,
 	if (ret)
 		goto free_new_domain;
 
-	ret = __iommu_attach_device(group->default_domain, dev);
+	group->domain = prev_dom;
+	ret = __iommu_group_set_domain(group, group->default_domain);
 	if (ret)
 		goto free_new_domain;
-
-	group->domain = group->default_domain;
 
 	/*
 	 * Release the mutex here because ops->probe_finalize() call-back of
@@ -3022,7 +3021,6 @@ static int iommu_change_dev_def_domain(struct iommu_group *group,
 free_new_domain:
 	iommu_domain_free(group->default_domain);
 	group->default_domain = prev_dom;
-	group->domain = prev_dom;
 
 out:
 	mutex_unlock(&group->mutex);
