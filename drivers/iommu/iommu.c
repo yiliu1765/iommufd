@@ -99,6 +99,7 @@ static int __iommu_attach_group(struct iommu_domain *domain,
 
 enum {
 	IOMMU_SET_DOMAIN_MUST_SUCCEED = 1 << 0,
+	IOMMU_SET_DOMAIN_WITH_DEFERRED = 1 << 1,
 };
 
 static int __iommu_group_set_domain_internal(struct iommu_group *group,
@@ -1814,12 +1815,6 @@ static void probe_alloc_default_domain(struct bus_type *bus,
 
 }
 
-static int __iommu_group_dma_first_attach(struct iommu_group *group)
-{
-	return __iommu_group_for_each_dev(group, group->default_domain,
-					  iommu_group_do_dma_first_attach);
-}
-
 static int iommu_group_do_probe_finalize(struct device *dev, void *data)
 {
 	const struct iommu_ops *ops = dev_iommu_ops(dev);
@@ -1882,7 +1877,10 @@ int bus_iommu_probe(struct bus_type *bus)
 
 		iommu_group_create_direct_mappings(group);
 
-		ret = __iommu_group_dma_first_attach(group);
+		group->domain = NULL;
+		ret = __iommu_group_set_domain_internal(
+			group, group->default_domain,
+			IOMMU_SET_DOMAIN_WITH_DEFERRED);
 
 		mutex_unlock(&group->mutex);
 
@@ -2202,6 +2200,12 @@ static int __iommu_device_set_domain(struct iommu_group *group,
 				     unsigned int flags)
 {
 	int ret;
+
+	if ((flags & IOMMU_SET_DOMAIN_WITH_DEFERRED) &&
+	    iommu_is_attach_deferred(dev)) {
+		dev->iommu->attach_deferred = 1;
+		return 0;
+	}
 
 	ret = __iommu_attach_device(new_domain, dev);
 	if (ret) {
