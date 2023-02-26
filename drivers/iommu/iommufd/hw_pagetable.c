@@ -7,6 +7,7 @@
 
 #include "../iommu-priv.h"
 #include "iommufd_private.h"
+#include "iommufd_test.h"
 
 void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 {
@@ -180,8 +181,8 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	struct iommufd_device *idev;
 	struct iommufd_ioas *ioas;
 	void *data = NULL;
+	u32 klen = 0;
 	int rc = 0;
-	u32 klen;
 
 	if (cmd->flags || cmd->__reserved)
 		return -EOPNOTSUPP;
@@ -239,7 +240,12 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 		goto out_put_pt;
 	}
 
-	klen = iommufd_hwpt_alloc_data_size[cmd->hwpt_type];
+	if (cmd->hwpt_type != IOMMU_HWPT_TYPE_SELFTTEST)
+		klen = iommufd_hwpt_alloc_data_size[cmd->hwpt_type];
+#ifdef CONFIG_IOMMUFD_TEST
+	else
+		klen = sizeof(struct iommu_hwpt_selftest);
+#endif
 	if (klen) {
 		if (!cmd->data_len) {
 			rc = -EINVAL;
