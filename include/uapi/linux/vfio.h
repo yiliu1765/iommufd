@@ -673,6 +673,22 @@ struct vfio_pci_hot_reset_info {
  * VFIO_DEVICE_PCI_HOT_RESET - _IOW(VFIO_TYPE, VFIO_BASE + 13,
  *				    struct vfio_pci_hot_reset)
  *
+ * Userspace requests hot reset for the devices it uses.  Due to the
+ * underlying topology, multiple devices may be affected in the reset.
+ * The affected devices may have been opened by the user or by other
+ * users or not opened yet.  Only when all the affected devices are
+ * either opened by the current user or not opened by any user, should
+ * the reset request be allowed.  Otherwise, this request is expected
+ * to return error.
+ *
+ * If the user uses group and container interface, it should pass down
+ * a set of group fds for ownership check.  If the user uses iommufd, it
+ * should pass down a zero-length group_fds array to indicate the kernel
+ * to use the bound iommufd for the ownership check.  User that uses the
+ * vfio iommufd compatible mode can also pass down a zero-length group_fds
+ * array as this mode uses iommufd in kernel, and there is no reason to
+ * forbide it.
+ *
  * Return: 0 on success, -errno on failure.
  */
 struct vfio_pci_hot_reset {
