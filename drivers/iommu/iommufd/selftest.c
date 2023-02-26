@@ -87,7 +87,9 @@ void iommufd_test_syz_conv_iova_id(struct iommufd_ucmd *ucmd,
 
 struct mock_iommu_domain {
 	struct iommu_domain domain;
+	struct mock_iommu_domain *parent;
 	struct xarray pfns;
+	u32 iotlb;
 };
 
 enum selftest_obj_type {
@@ -146,8 +148,13 @@ static void *mock_domain_hw_info(struct device *dev, u32 *length, u32 *type)
 	return info;
 }
 
+static const struct iommu_ops mock_ops;
+static struct iommu_domain_ops domain_nested_ops;
+
 static struct iommu_domain *
-__mock_domain_alloc(unsigned int iommu_domain_type, u32 flags)
+__mock_domain_alloc(unsigned int iommu_domain_type,
+		    struct mock_iommu_domain *mock_parent,
+		    const struct iommu_hwpt_selftest *user_cfg)
 {
 	struct mock_iommu_domain *mock;
 
@@ -156,11 +163,19 @@ __mock_domain_alloc(unsigned int iommu_domain_type, u32 flags)
 
 	mock = kzalloc(sizeof(*mock), GFP_KERNEL);
 	if (!mock)
-		return NULL;
-	mock->domain.geometry.aperture_start = MOCK_APERTURE_START;
-	mock->domain.geometry.aperture_end = MOCK_APERTURE_LAST;
+		return ERR_PTR(-ENOMEM);
+	mock->parent = mock_parent;
+	mock->domain.type = iommu_domain_type;
 	mock->domain.pgsize_bitmap = MOCK_IO_PAGE_SIZE;
-	xa_init(&mock->pfns);
+	if (mock_parent) {
+		mock->iotlb = user_cfg->test_config;
+		mock->domain.ops = &domain_nested_ops;
+	} else {
+		mock->domain.geometry.aperture_start = MOCK_APERTURE_START;
+		mock->domain.geometry.aperture_end = MOCK_APERTURE_LAST;
+		mock->domain.ops = mock_ops.default_domain_ops;
+		xa_init(&mock->pfns);
+	}
 	return &mock->domain;
 }
 
@@ -171,7 +186,7 @@ static struct iommu_domain *mock_domain_alloc(unsigned int iommu_domain_type)
 	if (WARN_ON(iommu_domain_type != IOMMU_DOMAIN_BLOCKED &&
 		    iommu_domain_type != IOMMU_DOMAIN_UNMANAGED))
 		return NULL;
-	domain = __mock_domain_alloc(IOMMU_DOMAIN_UNMANAGED, 0);
+	domain = __mock_domain_alloc(IOMMU_DOMAIN_UNMANAGED, NULL, NULL);
 	if (IS_ERR(domain))
 		domain = NULL;
 	return domain;
@@ -183,7 +198,37 @@ mock_domain_alloc_user(struct device *dev, u32 flags,
 		      struct iommu_domain *parent,
 		      const struct iommu_user_data *user_data)
 {
-	return __mock_domain_alloc(IOMMU_DOMAIN_UNMANAGED, flags);
+	const size_t min_len =
+		offsetofend(struct iommu_hwpt_selftest, test_config);
+	unsigned int iommu_domain_type = IOMMU_DOMAIN_UNMANAGED;
+	struct iommu_hwpt_selftest data, *user_cfg = NULL;
+	struct mock_iommu_domain *mock_parent = NULL;
+
+	if (hwpt_type != IOMMU_HWPT_TYPE_DEFAULT &&
+	    hwpt_type != IOMMU_HWPT_TYPE_SELFTEST)
+		return ERR_PTR(-EINVAL);
+
+	if (user_data) {
+		int rc = iommu_copy_user_data(&data, user_data,
+					      sizeof(data), min_len);
+		if (rc)
+			return ERR_PTR(rc);
+		user_cfg = &data;
+	}
+
+	if (parent) {
+		if (hwpt_type != IOMMU_HWPT_TYPE_SELFTEST)
+			return ERR_PTR(-EINVAL);
+		if (parent->ops != mock_ops.default_domain_ops)
+			return ERR_PTR(-EINVAL);
+		if (!user_cfg || !(user_cfg->flags & IOMMU_TEST_FLAG_NESTED))
+			return ERR_PTR(-EINVAL);
+		iommu_domain_type = IOMMU_DOMAIN_NESTED;
+		mock_parent = container_of(parent,
+					   struct mock_iommu_domain, domain);
+	}
+
+	return __mock_domain_alloc(iommu_domain_type, mock_parent, user_cfg);
 }
 
 static void mock_domain_free(struct iommu_domain *domain)
@@ -342,6 +387,11 @@ static const struct iommu_ops mock_ops = {
 		},
 };
 
+static struct iommu_domain_ops domain_nested_ops = {
+	.free = mock_domain_free,
+	.attach_dev = mock_domain_nop_attach,
+};
+
 static inline struct iommufd_hw_pagetable *
 get_md_pagetable(struct iommufd_ucmd *ucmd, u32 mockpt_id,
 		 struct mock_iommu_domain **mock)
@@ -354,7 +404,10 @@ get_md_pagetable(struct iommufd_ucmd *ucmd, u32 mockpt_id,
 	if (IS_ERR(obj))
 		return ERR_CAST(obj);
 	hwpt = container_of(obj, struct iommufd_hw_pagetable, obj);
-	if (hwpt->domain->ops != mock_ops.default_domain_ops) {
+	if ((hwpt->domain->type == IOMMU_DOMAIN_UNMANAGED &&
+	     hwpt->domain->ops != mock_ops.default_domain_ops) ||
+	    (hwpt->domain->type == IOMMU_DOMAIN_NESTED &&
+	     hwpt->domain->ops != &domain_nested_ops)) {
 		iommufd_put_object(&hwpt->obj);
 		return ERR_PTR(-EINVAL);
 	}
