@@ -7,6 +7,7 @@
 
 #include "../iommu-priv.h"
 #include "iommufd_private.h"
+#include "iommufd_test.h"
 
 static void iommufd_user_managed_hwpt_destroy(struct iommufd_object *obj)
 {
