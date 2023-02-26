@@ -209,7 +209,8 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	 * the ops->domain_alloc_user_data_len presence.
 	 */
 	if (cmd->hwpt_type != IOMMU_HWPT_TYPE_DEFAULT) {
-		if (!(BIT_ULL(cmd->hwpt_type) & ops->hwpt_type_bitmap)) {
+		if (cmd->hwpt_type != IOMMU_HWPT_TYPE_SELFTTEST &&
+		    !(BIT_ULL(cmd->hwpt_type) & ops->hwpt_type_bitmap)) {
 			rc = -EINVAL;
 			goto out_put_idev;
 		}
