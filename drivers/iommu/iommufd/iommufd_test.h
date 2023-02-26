@@ -109,4 +109,18 @@ struct iommu_test_hw_info {
 	__u32 test_reg;
 };
 
+/* Should not be equal to any defined value in enum iommu_hwpt_type */
+#define IOMMU_HWPT_TYPE_SELFTEST		0xdead
+
+/**
+ * struct iommu_hwpt_selftest
+ *
+ * @flags: page table entry attributes, must be 0
+ * @test_type: can be either IOMMU_HW_INFO_TYPE_NONE or IOMMU_HWPT_TYPE_SELFTEST
+ */
+struct iommu_hwpt_selftest {
+	__u64 flags;
+	__u32 test_type;
+};
+
 #endif
