@@ -66,6 +66,7 @@ struct vfio_device {
 	struct iommufd_device *iommufd_device;
 	bool iommufd_attached;
 #endif
+	bool cdev_opened:1;
 };
 
 /**
@@ -170,7 +171,7 @@ vfio_iommufd_device_hot_reset_devid(struct vfio_device *vdev,
 
 static inline bool vfio_device_cdev_opened(struct vfio_device *device)
 {
-	return false;
+	return device->cdev_opened;
 }
 
 /**
