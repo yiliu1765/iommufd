@@ -287,6 +287,9 @@ static inline void vfio_device_del(struct vfio_device *device)
 }
 
 int vfio_device_fops_cdev_open(struct inode *inode, struct file *filep);
+void vfio_df_cdev_close(struct vfio_device_file *df);
+long vfio_df_ioctl_bind_iommufd(struct vfio_device_file *df,
+				struct vfio_device_bind_iommufd __user *arg);
 int vfio_cdev_init(struct class *device_class);
 void vfio_cdev_cleanup(void);
 #else
@@ -308,6 +311,16 @@ static inline int vfio_device_fops_cdev_open(struct inode *inode,
 					     struct file *filep)
 {
 	return 0;
+}
+
+static inline void vfio_df_cdev_close(struct vfio_device_file *df)
+{
+}
+
+static inline long vfio_df_ioctl_bind_iommufd(struct vfio_device_file *df,
+					      struct vfio_device_bind_iommufd __user *arg)
+{
+	return -EOPNOTSUPP;
 }
 
 static inline int vfio_cdev_init(struct class *device_class)
