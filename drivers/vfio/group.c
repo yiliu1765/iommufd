@@ -780,6 +780,21 @@ void vfio_device_group_unregister(struct vfio_device *device)
 	mutex_unlock(&device->group->device_lock);
 }
 
+/*
+ * This shall be used without group lock as group and group->container
+ * should be fixed before group is set to df->group.
+ */
+bool vfio_device_group_uses_container(struct vfio_device_file *df)
+{
+	/*
+	 * Use the df->group instead of the df->device->group as no
+	 * lock is acquired here.
+	 */
+	if (WARN_ON(!df->group))
+		return false;
+	return READ_ONCE(df->group->container);
+}
+
 int vfio_device_group_use_iommu(struct vfio_device *device)
 {
 	struct vfio_group *group = device->group;
