@@ -232,6 +232,8 @@ static inline void vfio_container_cleanup(void)
 #if IS_ENABLED(CONFIG_IOMMUFD)
 int vfio_iommufd_bind(struct vfio_device *device, struct iommufd_ctx *ictx);
 void vfio_iommufd_unbind(struct vfio_device *device);
+int vfio_iommufd_attach_compat_ioas(struct vfio_device *vdev,
+				    struct iommufd_ctx *ictx);
 #else
 static inline int vfio_iommufd_bind(struct vfio_device *device,
 				    struct iommufd_ctx *ictx)
@@ -241,6 +243,12 @@ static inline int vfio_iommufd_bind(struct vfio_device *device,
 
 static inline void vfio_iommufd_unbind(struct vfio_device *device)
 {
+}
+
+static inline int vfio_iommufd_attach_compat_ioas(struct vfio_device *vdev,
+						  struct iommufd_ctx *ictx)
+{
+	return -EOPNOTSUPP;
 }
 #endif
 

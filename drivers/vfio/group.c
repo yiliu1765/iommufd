@@ -177,7 +177,7 @@ static int vfio_device_group_open(struct vfio_device_file *df)
 	mutex_lock(&device->group->group_lock);
 	if (!vfio_group_has_iommu(device->group)) {
 		ret = -EINVAL;
-		goto out_unlock;
+		goto err_unlock;
 	}
 
 	mutex_lock(&device->dev_set->lock);
@@ -194,9 +194,14 @@ static int vfio_device_group_open(struct vfio_device_file *df)
 	df->iommufd = device->group->iommufd;
 
 	ret = vfio_device_open(df);
-	if (ret) {
-		df->iommufd = NULL;
-		goto out_put_kvm;
+	if (ret)
+		goto err_put_kvm;
+
+	if (device->group->iommufd) {
+		ret = vfio_iommufd_attach_compat_ioas(device,
+						      device->group->iommufd);
+		if (ret)
+			goto err_close_device;
 	}
 
 	/*
@@ -205,13 +210,18 @@ static int vfio_device_group_open(struct vfio_device_file *df)
 	 */
 	smp_store_release(&df->access_granted, true);
 
-out_put_kvm:
+	mutex_unlock(&device->dev_set->lock);
+	mutex_unlock(&device->group->group_lock);
+	return 0;
+
+err_close_device:
+	vfio_device_close(df);
+err_put_kvm:
+	df->iommufd = NULL;
 	if (device->open_count == 0)
 		vfio_device_put_kvm(device);
-
 	mutex_unlock(&device->dev_set->lock);
-
-out_unlock:
+err_unlock:
 	mutex_unlock(&device->group->group_lock);
 	return ret;
 }
