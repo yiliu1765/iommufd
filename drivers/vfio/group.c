@@ -701,6 +701,21 @@ static struct vfio_group *vfio_group_find_or_alloc(struct device *dev)
 	return group;
 }
 
+struct vfio_group *
+vfio_group_find_noiommu_group_from_iommu(struct iommu_group *iommu_group)
+{
+	struct vfio_group *group;
+	bool found = false;
+
+	mutex_lock(&vfio.group_lock);
+	group = vfio_group_find_from_iommu(iommu_group);
+	if (group && group->type == VFIO_NO_IOMMU)
+		found = true;
+	mutex_unlock(&vfio.group_lock);
+
+	return found ? group : NULL;
+}
+
 int vfio_device_set_group(struct vfio_device *device,
 			  enum vfio_group_type type)
 {

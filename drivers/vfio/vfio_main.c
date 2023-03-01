@@ -575,6 +575,8 @@ static int vfio_device_fops_release(struct inode *inode, struct file *filep)
 
 	if (df->group)
 		vfio_device_group_close(df);
+	else
+		vfio_device_cdev_close(df);
 
 	vfio_device_put_registration(device);
 
@@ -1148,7 +1150,14 @@ static long vfio_device_fops_unl_ioctl(struct file *filep,
 	struct vfio_device *device = df->device;
 	int ret;
 
-	/* Paired with smp_store_release() in vfio_device_group_open() */
+	if (cmd == VFIO_DEVICE_BIND_IOMMUFD)
+		return vfio_device_ioctl_bind_iommufd(df, (void __user *)arg);
+
+	/*
+	 * Paired with smp_store_release() in the caller of
+	 * vfio_device_open(). e.g. vfio_device_group_open()
+	 * and vfio_device_ioctl_bind_iommufd()
+	 */
 	if (!smp_load_acquire(&df->access_granted))
 		return -EINVAL;
 
@@ -1179,7 +1188,11 @@ static ssize_t vfio_device_fops_read(struct file *filep, char __user *buf,
 	struct vfio_device_file *df = filep->private_data;
 	struct vfio_device *device = df->device;
 
-	/* Paired with smp_store_release() in vfio_device_group_open() */
+	/*
+	 * Paired with smp_store_release() in the caller of
+	 * vfio_device_open(). e.g. vfio_device_group_open()
+	 * and vfio_device_ioctl_bind_iommufd()
+	 */
 	if (!smp_load_acquire(&df->access_granted))
 		return -EINVAL;
 
@@ -1196,7 +1209,11 @@ static ssize_t vfio_device_fops_write(struct file *filep,
 	struct vfio_device_file *df = filep->private_data;
 	struct vfio_device *device = df->device;
 
-	/* Paired with smp_store_release() in vfio_device_group_open() */
+	/*
+	 * Paired with smp_store_release() in the caller of
+	 * vfio_device_open(). e.g. vfio_device_group_open()
+	 * and vfio_device_ioctl_bind_iommufd()
+	 */
 	if (!smp_load_acquire(&df->access_granted))
 		return -EINVAL;
 
@@ -1211,7 +1228,11 @@ static int vfio_device_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 	struct vfio_device_file *df = filep->private_data;
 	struct vfio_device *device = df->device;
 
-	/* Paired with smp_store_release() in vfio_device_group_open() */
+	/*
+	 * Paired with smp_store_release() in the caller of
+	 * vfio_device_open(). e.g. vfio_device_group_open()
+	 * and vfio_device_ioctl_bind_iommufd()
+	 */
 	if (!smp_load_acquire(&df->access_granted))
 		return -EINVAL;
 

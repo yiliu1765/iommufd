@@ -91,6 +91,8 @@ struct vfio_group {
 
 int vfio_device_block_group(struct vfio_device *device);
 void vfio_device_unblock_group(struct vfio_device *device);
+struct vfio_group *
+vfio_group_find_noiommu_group_from_iommu(struct iommu_group *iommu_group);
 int vfio_device_set_group(struct vfio_device *device,
 			  enum vfio_group_type type);
 void vfio_device_remove_group(struct vfio_device *device);
@@ -273,6 +275,9 @@ static inline void vfio_device_del(struct vfio_device *device)
 
 void vfio_init_device_cdev(struct vfio_device *device);
 int vfio_device_fops_cdev_open(struct inode *inode, struct file *filep);
+void vfio_device_cdev_close(struct vfio_device_file *df);
+long vfio_device_ioctl_bind_iommufd(struct vfio_device_file *df,
+				    struct vfio_device_bind_iommufd __user *arg);
 int vfio_cdev_init(struct class *device_class);
 void vfio_cdev_cleanup(void);
 #else
@@ -294,6 +299,16 @@ static inline int vfio_device_fops_cdev_open(struct inode *inode,
 					     struct file *filep)
 {
 	return 0;
+}
+
+static inline void vfio_device_cdev_close(struct vfio_device_file *df)
+{
+}
+
+static inline long vfio_device_ioctl_bind_iommufd(struct vfio_device_file *df,
+						  struct vfio_device_bind_iommufd __user *arg)
+{
+	return -EOPNOTSUPP;
 }
 
 static inline int vfio_cdev_init(struct class *device_class)
