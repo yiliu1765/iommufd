@@ -13,6 +13,7 @@ struct iommu_domain;
 struct iommu_group;
 struct iommu_option;
 struct iommufd_device;
+struct iommu_user_data;
 
 struct iommufd_ctx {
 	struct file *file;
@@ -247,7 +248,10 @@ struct iommufd_hw_pagetable {
 
 struct iommufd_hw_pagetable *
 iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
-			   struct iommufd_device *idev, u32 flags,
+			   struct iommufd_device *idev,
+			   u32 flags,
+			   enum iommu_hwpt_type hwpt_type,
+			   struct iommu_user_data *user_data,
 			   bool immediate_attach);
 int iommufd_hw_pagetable_enforce_cc(struct iommufd_hw_pagetable *hwpt);
 int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
