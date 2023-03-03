@@ -192,8 +192,12 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 
 	ops = dev_iommu_ops(idev->dev);
 
-	/* Only support IOMMU_HWPT_TYPE_DEFAULT for now */
-	if (cmd->hwpt_type != IOMMU_HWPT_TYPE_DEFAULT) {
+	/*
+	 * All drivers support IOMMU_HWPT_TYPE_DEFAULT, so pass it through.
+	 * For any other cmd->hwpt_type, check ops->hwpt_type_bitmap.
+	 */
+	if (cmd->hwpt_type != IOMMU_HWPT_TYPE_DEFAULT &&
+	    !(BIT_ULL(cmd->hwpt_type) & ops->hwpt_type_bitmap)) {
 		rc = -EINVAL;
 		goto out_put_idev;
 	}
