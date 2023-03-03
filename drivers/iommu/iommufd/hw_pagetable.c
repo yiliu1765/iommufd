@@ -306,6 +306,7 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 			struct iommufd_device *idev, enum iommu_hwpt_type type,
 			union iommu_domain_user_data *user_data, bool flag);
 	struct iommufd_hw_pagetable *hwpt, *parent;
+	union iommu_domain_user_data *data = NULL;
 	struct iommu_hwpt_alloc *cmd = ucmd->cmd;
 	struct iommufd_object *pt_obj;
 	struct iommufd_device *idev;
@@ -315,6 +316,8 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 
 	if (cmd->flags || cmd->__reserved)
 		return -EOPNOTSUPP;
+	if (!cmd->data_len && cmd->hwpt_type != IOMMU_HWPT_TYPE_DEFAULT)
+		return -EINVAL;
 
 	idev = iommufd_get_device(ucmd, cmd->dev_id);
 	if (IS_ERR(idev))
@@ -347,9 +350,48 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 		goto out_put_pt;
 	}
 
+	if (cmd->data_len) {
+		const struct iommu_ops *ops = dev_iommu_ops(idev->dev);
+
+		if (!ops->domain_alloc_user ||
+		    !ops->domain_alloc_user_data_len.min ||
+		    !ops->domain_alloc_user_data_len.max) {
+			rc = -EOPNOTSUPP;
+			goto out_put_pt;
+		}
+
+		/*
+		 * Driver is buggy by providing an invalid range, or the domain
+		 * user data struct is missing in union iommu_domain_user_data.
+		 */
+		if (WARN_ON_ONCE(ops->domain_alloc_user_data_len.min >
+				 ops->domain_alloc_user_data_len.max ||
+				 ops->domain_alloc_user_data_len.max >
+				 sizeof(union iommu_domain_user_data))) {
+			rc = -EINVAL;
+			goto out_put_pt;
+		}
+
+		if (cmd->data_len < ops->domain_alloc_user_data_len.min) {
+			rc = -EINVAL;
+			goto out_put_pt;
+		}
+
+		data = kzalloc(sizeof(*data), GFP_KERNEL);
+		if (!data) {
+			rc = -ENOMEM;
+			goto out_put_pt;
+		}
+
+		rc = copy_struct_from_user(data, sizeof(*data),
+					   u64_to_user_ptr(cmd->data_uptr),
+					   cmd->data_len);
+		if (rc)
+			goto out_free_data;
+	}
+
 	mutex_lock(mutex);
-	hwpt = alloc_fn(ucmd->ictx, pt_obj, idev,
-			IOMMU_HWPT_TYPE_DEFAULT, NULL, false);
+	hwpt = alloc_fn(ucmd->ictx, pt_obj, idev, cmd->hwpt_type, data, false);
 	if (IS_ERR(hwpt)) {
 		rc = PTR_ERR(hwpt);
 		goto out_unlock;
@@ -366,6 +408,8 @@ out_hwpt:
 	iommufd_object_abort_and_destroy(ucmd->ictx, &hwpt->obj);
 out_unlock:
 	mutex_unlock(mutex);
+out_free_data:
+	kfree(data);
 out_put_pt:
 	iommufd_put_object(pt_obj);
 out_put_idev:
