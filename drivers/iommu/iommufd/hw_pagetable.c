@@ -190,8 +190,15 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 
 	ops = dev_iommu_ops(idev->dev);
 
-	/* Only support IOMMU_HWPT_TYPE_DEFAULT for now */
-	if (cmd->data_type != IOMMU_HWPT_TYPE_DEFAULT) {
+	/*
+	 * cmd->data_type should be a supported type marked in the
+	 * ops->hwpt_type_bitmap. Otherwise, the allocation can continue
+	 * only when the ops->hw_info_type==IOMMU_HW_INFO_TYPE_NONE and
+	 * cmd->data_type==IOMMU_HWPT_TYPE_DEFAULT.
+	 */
+	if (!((1 << cmd->data_type) & ops->hwpt_type_bitmap) &&
+	    ((ops->hw_info_type != IOMMU_HW_INFO_TYPE_NONE) ||
+	     (cmd->data_type != IOMMU_HWPT_TYPE_DEFAULT))) {
 		rc = -EINVAL;
 		goto out_put_idev;
 	}

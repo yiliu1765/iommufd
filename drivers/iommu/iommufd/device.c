@@ -330,6 +330,7 @@ out:
 	if (!rc) {
 		cmd->out_data_type = ops->hw_info_type;
 		cmd->data_len = length;
+		cmd->out_hwpt_type_bitmap = ops->hwpt_type_bitmap;
 		rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
 	}
 
