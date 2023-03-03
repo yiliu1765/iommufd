@@ -168,6 +168,14 @@ static const size_t iommufd_hwpt_alloc_data_size[] = {
 	[IOMMU_HWPT_TYPE_DEFAULT] = 0,
 };
 
+/*
+ * bitmaps of supported hwpt types of by underlying iommu, indexed
+ * by ops->driver_type which is one of enum iommu_hw_info_type.
+ */
+const u64 iommufd_hwpt_type_bitmaps[] =  {
+	[IOMMU_HW_INFO_TYPE_DEFAULT] = BIT_ULL(IOMMU_HWPT_TYPE_DEFAULT),
+};
+
 int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 {
 	struct iommufd_hw_pagetable *hwpt, *parent = NULL;
@@ -176,7 +184,7 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	struct iommufd_device *idev;
 	struct iommufd_ioas *ioas;
 	const struct iommu_ops *ops;
-	u32 klen;
+	u32 driver_type, klen;
 	void *data = NULL;
 	int rc;
 
@@ -193,8 +201,12 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 		goto out_put_idev;
 	}
 
-	/* Only support IOMMU_HWPT_TYPE_DEFAULT for now */
-	if (cmd->data_type != IOMMU_HWPT_TYPE_DEFAULT) {
+	driver_type = ops->driver_type;
+
+	/* data_type should be a supported type by the driver */
+	if (WARN_ON(driver_type >= ARRAY_SIZE(iommufd_hwpt_type_bitmaps)) ||
+	    !((1 << cmd->data_type) &
+			iommufd_hwpt_type_bitmaps[driver_type])) {
 		rc = -EINVAL;
 		goto out_put_idev;
 	}
