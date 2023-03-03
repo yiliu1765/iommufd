@@ -62,6 +62,8 @@ int iommufd_hw_pagetable_enforce_cc(struct iommufd_hw_pagetable *hwpt)
  * @ioas: IOAS to associate the domain with
  * @idev: Device to get an iommu_domain for
  * @flags: Flags from userspace
+ * @hwpt_type: Requested type of hw_pagetable
+ * @user_data: Optional user_data pointer
  * @immediate_attach: True if idev should be attached to the hwpt
  *
  * Allocate a new iommu_domain and return it as a hw_pagetable. The HWPT
@@ -74,7 +76,10 @@ int iommufd_hw_pagetable_enforce_cc(struct iommufd_hw_pagetable *hwpt)
  */
 struct iommufd_hw_pagetable *
 iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
-			   struct iommufd_device *idev, u32 flags,
+			   struct iommufd_device *idev,
+			   u32 flags,
+			   enum iommu_hwpt_type hwpt_type,
+			   struct iommu_user_data *user_data,
 			   bool immediate_attach)
 {
 	const struct iommu_ops *ops = dev_iommu_ops(idev->dev);
@@ -84,6 +89,11 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 	lockdep_assert_held(&ioas->mutex);
 
 	if ((flags & IOMMU_HWPT_ALLOC_NEST_PARENT) && !ops->domain_alloc_user)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	if (user_data && hwpt_type == IOMMU_HWPT_TYPE_DEFAULT)
+		return ERR_PTR(-EINVAL);
+	if (user_data && !ops->domain_alloc_user)
 		return ERR_PTR(-EOPNOTSUPP);
 
 	hwpt = iommufd_object_alloc(ictx, hwpt, IOMMUFD_OBJ_HW_PAGETABLE);
@@ -97,8 +107,8 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 
 	if (ops->domain_alloc_user) {
 		hwpt->domain = ops->domain_alloc_user(idev->dev, flags,
-						      IOMMU_HWPT_TYPE_DEFAULT,
-						      NULL, NULL);
+						      hwpt_type, NULL,
+						      user_data);
 		if (IS_ERR(hwpt->domain)) {
 			rc = PTR_ERR(hwpt->domain);
 			hwpt->domain = NULL;
@@ -174,7 +184,9 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 
 	mutex_lock(&ioas->mutex);
 	hwpt = iommufd_hw_pagetable_alloc(ucmd->ictx, ioas,
-					  idev, cmd->flags, false);
+					  idev, cmd->flags,
+					  IOMMU_HWPT_TYPE_DEFAULT,
+					  NULL, false);
 	if (IS_ERR(hwpt)) {
 		rc = PTR_ERR(hwpt);
 		goto out_unlock;
