@@ -24,6 +24,8 @@ void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 	if (hwpt->domain)
 		iommu_domain_free(hwpt->domain);
 
+	if (hwpt->parent)
+		refcount_dec(&hwpt->parent->obj.users);
 	refcount_dec(&hwpt->ioas->obj.users);
 }
 
@@ -38,6 +40,23 @@ int iommufd_hw_pagetable_enforce_cc(struct iommufd_hw_pagetable *hwpt)
 				hwpt->domain);
 	if (!hwpt->enforce_cache_coherency)
 		return -EINVAL;
+	return 0;
+}
+
+static int iommufd_hw_pagetable_link_ioas(struct iommufd_hw_pagetable *hwpt)
+{
+	int rc;
+
+	if (hwpt->parent)
+		hwpt = hwpt->parent;
+
+	if (!list_empty(&hwpt->hwpt_item))
+		return 0;
+
+	rc = iopt_table_add_domain(&hwpt->ioas->iopt, hwpt->domain);
+	if (rc)
+		return rc;
+	list_add_tail(&hwpt->hwpt_item, &hwpt->ioas->hwpt_list);
 	return 0;
 }
 
@@ -79,6 +98,7 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 	refcount_inc(&ioas->obj.users);
 	hwpt->ioas = ioas;
 	if (parent) {
+		hwpt->parent = parent;
 		parent_domain = parent->domain;
 		refcount_inc(&parent->obj.users);
 	}
@@ -123,10 +143,9 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 			goto out_unlock;
 	}
 
-	rc = iopt_table_add_domain(&hwpt->ioas->iopt, hwpt->domain);
+	rc = iommufd_hw_pagetable_link_ioas(hwpt);
 	if (rc)
 		goto out_detach;
-	list_add_tail(&hwpt->hwpt_item, &hwpt->ioas->hwpt_list);
 
 	mutex_unlock(&idev->igroup->lock);
 	return hwpt;
