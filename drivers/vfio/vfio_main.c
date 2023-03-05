@@ -1277,6 +1277,48 @@ void vfio_file_set_kvm(struct file *file, struct kvm *kvm)
 }
 EXPORT_SYMBOL_GPL(vfio_file_set_kvm);
 
+/**
+ * vfio_file_has_device_access - True if the file has opened device
+ * @file: VFIO device file
+ */
+bool vfio_file_has_device_access(struct file *file)
+{
+	struct vfio_device_file *df;
+
+	if (vfio_group_from_file(file) ||
+	    !vfio_device_from_file(file))
+		return false;
+
+	df = file->private_data;
+
+	return READ_ONCE(df->access_granted);
+}
+EXPORT_SYMBOL_GPL(vfio_file_has_device_access);
+
+/**
+ * vfio_file_has_dev - True if the VFIO file is a handle for device
+ * @file: VFIO file to check
+ * @device: Device that must be part of the file
+ *
+ * Returns true if given file has permission to manipulate the given device.
+ */
+bool vfio_file_has_dev(struct file *file, struct vfio_device *device)
+{
+	struct vfio_group *group;
+	struct vfio_device *vdev;
+
+	group = vfio_group_from_file(file);
+	if (group)
+		return vfio_group_has_dev(group, device);
+
+	vdev = vfio_device_from_file(file);
+	if (device)
+		return vdev == device;
+
+	return false;
+}
+EXPORT_SYMBOL_GPL(vfio_file_has_dev);
+
 /*
  * Sub-module support
  */

@@ -1300,7 +1300,7 @@ static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
 		return -ENOMEM;
 	}
 
-	if (copy_from_user(user_fds, arg->group_fds,
+	if (copy_from_user(user_fds, arg->fds,
 			   hdr.count * sizeof(*user_fds))) {
 		kfree(user_fds);
 		kfree(files);
@@ -1308,8 +1308,8 @@ static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
 	}
 
 	/*
-	 * Get the group file for each fd to ensure the group held across
-	 * the reset
+	 * Get the file for each fd to ensure the group/device file
+	 * is held across the reset
 	 */
 	for (file_idx = 0; file_idx < hdr.count; file_idx++) {
 		struct file *file = fget(user_fds[file_idx]);
@@ -1319,8 +1319,14 @@ static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
 			break;
 		}
 
-		/* Ensure the FD is a vfio group FD.*/
-		if (!vfio_file_is_group(file)) {
+		/*
+		 * For vfio group FD, sanitize the file is enough.
+		 * For vfio device FD, needs to ensure it has got the
+		 * access to device, otherwise it cannot be used as
+		 * proof of device ownership.
+		 */
+		if (!vfio_file_is_valid(file) ||
+		    (!vfio_file_is_group(file) && !vfio_file_has_device_access(file))) {
 			fput(file);
 			ret = -EINVAL;
 			break;
@@ -2440,9 +2446,9 @@ static int vfio_pci_dev_set_hot_reset(struct vfio_device_set *dev_set,
 		 * by other users.
 		 *
 		 * For the devices that have been opened, needs to check the
-		 * ownership.  If the user provides a set of group fds, test
-		 * whether all the opened affected devices are contained by the
-		 * set of groups provided by the user.
+		 * ownership.  If the user provides a set of group/device
+		 * fds, test whether all the opened devices are contained
+		 * by the set of groups/devices provided by the user.
 		 */
 		if (cur_vma->vdev.open_count &&
 		    !vfio_dev_in_user_fds(cur_vma, user_info)) {
