@@ -28,7 +28,8 @@ static int vfio_iommufd_device_probe_comapt_noiommu(struct vfio_device *vdev,
 	return 0;
 }
 
-int vfio_iommufd_bind(struct vfio_device *vdev, struct iommufd_ctx *ictx)
+int vfio_iommufd_bind(struct vfio_device *vdev, struct iommufd_ctx *ictx,
+		      u32 *devid)
 {
 	u32 device_id;
 	int ret;
@@ -44,8 +45,14 @@ int vfio_iommufd_bind(struct vfio_device *vdev, struct iommufd_ctx *ictx)
 	if (WARN_ON(!vdev->ops->bind_iommufd))
 		return -ENODEV;
 
-	/* The legacy path has no way to return the device id */
-	return vdev->ops->bind_iommufd(vdev, ictx, &device_id);
+	ret = vdev->ops->bind_iommufd(vdev, ictx, &device_id);
+	if (ret)
+		return ret;
+
+	if (devid)
+		*devid = device_id;
+
+	return 0;
 }
 
 int vfio_iommufd_attach_compat_ioas(struct vfio_device *vdev,

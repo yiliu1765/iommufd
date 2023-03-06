@@ -10,6 +10,8 @@
 #include <linux/errno.h>
 #include <linux/err.h>
 
+#define IOMMUFD_INVALID_ID 0
+
 struct device;
 struct iommufd_device;
 struct page;

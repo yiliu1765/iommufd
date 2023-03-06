@@ -444,7 +444,7 @@ static int vfio_device_first_open(struct vfio_device_file *df)
 	 * to be done here just go ahead to open device.
 	 */
 	if (iommufd)
-		ret = vfio_iommufd_bind(device, iommufd);
+		ret = vfio_iommufd_bind(device, iommufd, &df->devid);
 	else if (vfio_device_group_uses_container(df))
 		ret = vfio_device_group_use_iommu(device);
 	if (ret)
@@ -476,10 +476,12 @@ static void vfio_device_last_close(struct vfio_device_file *df)
 
 	if (device->ops->close_device)
 		device->ops->close_device(device);
-	if (iommufd)
+	if (iommufd) {
 		vfio_iommufd_unbind(device);
-	else if (vfio_device_group_uses_container(df))
+		df->devid = IOMMUFD_INVALID_ID;
+	} else if (vfio_device_group_uses_container(df)) {
 		vfio_device_group_unuse_iommu(device);
+	}
 	module_put(device->dev->driver->owner);
 }
 
