@@ -180,7 +180,8 @@ no_mmap:
 struct vfio_pci_user_file_info;
 static void vfio_pci_dev_set_try_reset(struct vfio_device_set *dev_set);
 static int vfio_pci_dev_set_hot_reset(struct vfio_device_set *dev_set,
-				      struct vfio_pci_user_file_info *user_info);
+				      struct vfio_pci_user_file_info *user_info,
+				      struct iommufd_ctx *iommufd_ctx);
 
 /*
  * INTx masking requires the ability to disable INTx signaling via PCI_COMMAND
@@ -1255,28 +1256,16 @@ reset_info_exit:
 	return ret;
 }
 
-static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
+static int
+vfio_pci_ioctl_pci_hot_reset_user_files(struct vfio_pci_core_device *vdev,
+					struct vfio_pci_hot_reset *hdr,
+					bool slot,
 					struct vfio_pci_hot_reset __user *arg)
 {
-	unsigned long minsz = offsetofend(struct vfio_pci_hot_reset, count);
-	struct vfio_pci_hot_reset hdr;
 	int32_t *user_fds;
 	struct file **files;
 	struct vfio_pci_user_file_info info;
-	bool slot = false;
 	int file_idx, count = 0, ret = 0;
-
-	if (copy_from_user(&hdr, arg, minsz))
-		return -EFAULT;
-
-	if (hdr.argsz < minsz || hdr.flags)
-		return -EINVAL;
-
-	/* Can we do a slot or bus reset or neither? */
-	if (!pci_probe_reset_slot(vdev->pdev->slot))
-		slot = true;
-	else if (pci_probe_reset_bus(vdev->pdev->bus))
-		return -ENODEV;
 
 	/*
 	 * We can't let userspace give us an arbitrarily large buffer to copy,
@@ -1289,11 +1278,11 @@ static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
 		return ret;
 
 	/* Somewhere between 1 and count is OK */
-	if (!hdr.count || hdr.count > count)
+	if (hdr->count > count)
 		return -EINVAL;
 
-	user_fds = kcalloc(hdr.count, sizeof(*user_fds), GFP_KERNEL);
-	files = kcalloc(hdr.count, sizeof(*files), GFP_KERNEL);
+	user_fds = kcalloc(hdr->count, sizeof(*user_fds), GFP_KERNEL);
+	files = kcalloc(hdr->count, sizeof(*files), GFP_KERNEL);
 	if (!user_fds || !files) {
 		kfree(user_fds);
 		kfree(files);
@@ -1301,7 +1290,7 @@ static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
 	}
 
 	if (copy_from_user(user_fds, arg->fds,
-			   hdr.count * sizeof(*user_fds))) {
+			   hdr->count * sizeof(*user_fds))) {
 		kfree(user_fds);
 		kfree(files);
 		return -EFAULT;
@@ -1311,7 +1300,7 @@ static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
 	 * Get the file for each fd to ensure the group/device file
 	 * is held across the reset
 	 */
-	for (file_idx = 0; file_idx < hdr.count; file_idx++) {
+	for (file_idx = 0; file_idx < hdr->count; file_idx++) {
 		struct file *file = fget(user_fds[file_idx]);
 
 		if (!file) {
@@ -1341,10 +1330,10 @@ static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
 	if (ret)
 		goto hot_reset_release;
 
-	info.count = hdr.count;
+	info.count = hdr->count;
 	info.files = files;
 
-	ret = vfio_pci_dev_set_hot_reset(vdev->vdev.dev_set, &info);
+	ret = vfio_pci_dev_set_hot_reset(vdev->vdev.dev_set, &info, NULL);
 
 hot_reset_release:
 	for (file_idx--; file_idx >= 0; file_idx--)
@@ -1352,6 +1341,36 @@ hot_reset_release:
 
 	kfree(files);
 	return ret;
+}
+
+static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
+					struct vfio_pci_hot_reset __user *arg)
+{
+	unsigned long minsz = offsetofend(struct vfio_pci_hot_reset, count);
+	struct vfio_pci_hot_reset hdr;
+	struct iommufd_ctx *iommufd;
+	bool slot = false;
+
+	if (copy_from_user(&hdr, arg, minsz))
+		return -EFAULT;
+
+	if (hdr.argsz < minsz || hdr.flags)
+		return -EINVAL;
+
+	/* Can we do a slot or bus reset or neither? */
+	if (!pci_probe_reset_slot(vdev->pdev->slot))
+		slot = true;
+	else if (pci_probe_reset_bus(vdev->pdev->bus))
+		return -ENODEV;
+
+	if (hdr.count)
+		return vfio_pci_ioctl_pci_hot_reset_user_files(vdev, &hdr, slot, arg);
+
+	iommufd = vfio_iommufd_physical_ctx(&vdev->vdev);
+	if (!iommufd)
+		return -EINVAL;
+
+	return vfio_pci_dev_set_hot_reset(vdev->vdev.dev_set, NULL, iommufd);
 }
 
 static int vfio_pci_ioctl_ioeventfd(struct vfio_pci_core_device *vdev,
@@ -2323,6 +2342,9 @@ static bool vfio_dev_in_user_fds(struct vfio_pci_core_device *vdev,
 {
 	unsigned int i;
 
+	if (!user_info)
+		return false;
+
 	for (i = 0; i < user_info->count; i++)
 		if (vfio_file_has_dev(user_info->files[i], &vdev->vdev))
 			return true;
@@ -2398,13 +2420,25 @@ unwind:
 	return ret;
 }
 
+static bool vfio_dev_in_iommufd_ctx(struct vfio_pci_core_device *vdev,
+				    struct iommufd_ctx *iommufd_ctx)
+{
+	struct iommufd_ctx *iommufd = vfio_iommufd_physical_ctx(&vdev->vdev);
+
+	if (!iommufd)
+		return false;
+
+	return iommufd == iommufd_ctx;
+}
+
 /*
  * We need to get memory_lock for each device, but devices can share mmap_lock,
  * therefore we need to zap and hold the vma_lock for each device, and only then
  * get each memory_lock.
  */
 static int vfio_pci_dev_set_hot_reset(struct vfio_device_set *dev_set,
-				      struct vfio_pci_user_file_info *user_info)
+				      struct vfio_pci_user_file_info *user_info,
+				      struct iommufd_ctx *iommufd_ctx)
 {
 	struct vfio_pci_core_device *cur_mem;
 	struct vfio_pci_core_device *cur_vma;
@@ -2448,10 +2482,14 @@ static int vfio_pci_dev_set_hot_reset(struct vfio_device_set *dev_set,
 		 * For the devices that have been opened, needs to check the
 		 * ownership.  If the user provides a set of group/device
 		 * fds, test whether all the opened devices are contained
-		 * by the set of groups/devices provided by the user.
+		 * by the set of groups/devices provided by the user.  If
+		 * user provides a zero-length array, the ownerhsip check
+		 * is done by checking if all the opened devices are bound
+		 * to the same iommufd_ctx.
 		 */
 		if (cur_vma->vdev.open_count &&
-		    !vfio_dev_in_user_fds(cur_vma, user_info)) {
+		    !vfio_dev_in_user_fds(cur_vma, user_info) &&
+		    !vfio_dev_in_iommufd_ctx(cur_vma, iommufd_ctx)) {
 			ret = -EINVAL;
 			goto err_undo;
 		}
