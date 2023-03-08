@@ -177,10 +177,10 @@ no_mmap:
 	}
 }
 
-struct vfio_pci_group_info;
+struct vfio_pci_user_file_info;
 static void vfio_pci_dev_set_try_reset(struct vfio_device_set *dev_set);
 static int vfio_pci_dev_set_hot_reset(struct vfio_device_set *dev_set,
-				      struct vfio_pci_group_info *groups);
+				      struct vfio_pci_user_file_info *user_info);
 
 /*
  * INTx masking requires the ability to disable INTx signaling via PCI_COMMAND
@@ -799,7 +799,7 @@ static int vfio_pci_fill_devs(struct pci_dev *pdev, void *data)
 	return 0;
 }
 
-struct vfio_pci_group_info {
+struct vfio_pci_user_file_info {
 	int count;
 	struct file **files;
 };
@@ -1260,9 +1260,9 @@ static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
 {
 	unsigned long minsz = offsetofend(struct vfio_pci_hot_reset, count);
 	struct vfio_pci_hot_reset hdr;
-	int32_t *group_fds;
+	int32_t *user_fds;
 	struct file **files;
-	struct vfio_pci_group_info info;
+	struct vfio_pci_user_file_info info;
 	bool slot = false;
 	int file_idx, count = 0, ret = 0;
 
@@ -1292,17 +1292,17 @@ static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
 	if (!hdr.count || hdr.count > count)
 		return -EINVAL;
 
-	group_fds = kcalloc(hdr.count, sizeof(*group_fds), GFP_KERNEL);
+	user_fds = kcalloc(hdr.count, sizeof(*user_fds), GFP_KERNEL);
 	files = kcalloc(hdr.count, sizeof(*files), GFP_KERNEL);
-	if (!group_fds || !files) {
-		kfree(group_fds);
+	if (!user_fds || !files) {
+		kfree(user_fds);
 		kfree(files);
 		return -ENOMEM;
 	}
 
-	if (copy_from_user(group_fds, arg->group_fds,
-			   hdr.count * sizeof(*group_fds))) {
-		kfree(group_fds);
+	if (copy_from_user(user_fds, arg->group_fds,
+			   hdr.count * sizeof(*user_fds))) {
+		kfree(user_fds);
 		kfree(files);
 		return -EFAULT;
 	}
@@ -1312,7 +1312,7 @@ static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
 	 * the reset
 	 */
 	for (file_idx = 0; file_idx < hdr.count; file_idx++) {
-		struct file *file = fget(group_fds[file_idx]);
+		struct file *file = fget(user_fds[file_idx]);
 
 		if (!file) {
 			ret = -EBADF;
@@ -1329,9 +1329,9 @@ static int vfio_pci_ioctl_pci_hot_reset(struct vfio_pci_core_device *vdev,
 		files[file_idx] = file;
 	}
 
-	kfree(group_fds);
+	kfree(user_fds);
 
-	/* release reference to groups on error */
+	/* release reference to user_fds on error */
 	if (ret)
 		goto hot_reset_release;
 
@@ -2312,13 +2312,13 @@ const struct pci_error_handlers vfio_pci_core_err_handlers = {
 };
 EXPORT_SYMBOL_GPL(vfio_pci_core_err_handlers);
 
-static bool vfio_dev_in_groups(struct vfio_pci_core_device *vdev,
-			       struct vfio_pci_group_info *groups)
+static bool vfio_dev_in_user_fds(struct vfio_pci_core_device *vdev,
+				 struct vfio_pci_user_file_info *user_info)
 {
 	unsigned int i;
 
-	for (i = 0; i < groups->count; i++)
-		if (vfio_file_has_dev(groups->files[i], &vdev->vdev))
+	for (i = 0; i < user_info->count; i++)
+		if (vfio_file_has_dev(user_info->files[i], &vdev->vdev))
 			return true;
 	return false;
 }
@@ -2398,7 +2398,7 @@ unwind:
  * get each memory_lock.
  */
 static int vfio_pci_dev_set_hot_reset(struct vfio_device_set *dev_set,
-				      struct vfio_pci_group_info *groups)
+				      struct vfio_pci_user_file_info *user_info)
 {
 	struct vfio_pci_core_device *cur_mem;
 	struct vfio_pci_core_device *cur_vma;
@@ -2445,7 +2445,7 @@ static int vfio_pci_dev_set_hot_reset(struct vfio_device_set *dev_set,
 		 * set of groups provided by the user.
 		 */
 		if (cur_vma->vdev.open_count &&
-		    !vfio_dev_in_groups(cur_vma, groups)) {
+		    !vfio_dev_in_user_fds(cur_vma, user_info)) {
 			ret = -EINVAL;
 			goto err_undo;
 		}
