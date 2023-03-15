@@ -758,13 +758,11 @@ void iommufd_access_destroy(struct iommufd_access *access)
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_access_destroy, IOMMUFD);
 
-void iommufd_access_detach(struct iommufd_access *access)
+static void __iommufd_access_detach(struct iommufd_access *access)
 {
 	struct iommufd_ioas *cur_ioas = access->ioas;
 
-	mutex_lock(&access->ioas_lock);
-	if (WARN_ON(!access->ioas))
-		goto out;
+	lockdep_assert_held(&access->ioas_lock);
 	/*
 	 * Set ioas to NULL to block any further iommufd_access_pin_pages().
 	 * iommufd_access_unpin_pages() can continue using access->ioas_unpin.
@@ -778,16 +776,53 @@ void iommufd_access_detach(struct iommufd_access *access)
 	}
 	iopt_remove_access(&cur_ioas->iopt, access);
 	refcount_dec(&cur_ioas->obj.users);
+}
+
+void iommufd_access_detach(struct iommufd_access *access)
+{
+	mutex_lock(&access->ioas_lock);
+	if (WARN_ON(!access->ioas))
+		goto out;
+	__iommufd_access_detach(access);
 out:
 	access->ioas_unpin = NULL;
 	mutex_unlock(&access->ioas_lock);
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_access_detach, IOMMUFD);
 
+static int iommufd_access_change_pt(struct iommufd_access *access, u32 ioas_id)
+{
+	struct iommufd_ioas *cur_ioas = access->ioas;
+	struct iommufd_ioas *new_ioas;
+	int rc;
+
+	lockdep_assert_held(&access->ioas_lock);
+
+	new_ioas = iommufd_get_ioas(access->ictx, ioas_id);
+	if (IS_ERR(new_ioas))
+		return PTR_ERR(new_ioas);
+
+	if (cur_ioas)
+		__iommufd_access_detach(access);
+
+	rc = iopt_add_access(&new_ioas->iopt, access);
+	if (rc) {
+		iommufd_put_object(&new_ioas->obj);
+		if (cur_ioas)
+			WARN_ON(iommufd_access_change_pt(access,
+							 cur_ioas->obj.id));
+		return rc;
+	}
+	iommufd_ref_to_users(&new_ioas->obj);
+
+	access->ioas = new_ioas;
+	access->ioas_unpin = new_ioas;
+	return 0;
+}
+
 int iommufd_access_attach(struct iommufd_access *access, u32 ioas_id)
 {
-	struct iommufd_ioas *new_ioas;
-	int rc = 0;
+	int rc;
 
 	mutex_lock(&access->ioas_lock);
 	if (WARN_ON(access->ioas || access->ioas_unpin)) {
@@ -795,26 +830,31 @@ int iommufd_access_attach(struct iommufd_access *access, u32 ioas_id)
 		return -EINVAL;
 	}
 
-	new_ioas = iommufd_get_ioas(access->ictx, ioas_id);
-	if (IS_ERR(new_ioas)) {
-		mutex_unlock(&access->ioas_lock);
-		return PTR_ERR(new_ioas);
-	}
-
-	rc = iopt_add_access(&new_ioas->iopt, access);
-	if (rc) {
-		mutex_unlock(&access->ioas_lock);
-		iommufd_put_object(&new_ioas->obj);
-		return rc;
-	}
-	iommufd_ref_to_users(&new_ioas->obj);
-
-	access->ioas = new_ioas;
-	access->ioas_unpin = new_ioas;
+	rc = iommufd_access_change_pt(access, ioas_id);
 	mutex_unlock(&access->ioas_lock);
-	return 0;
+	return rc;
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_access_attach, IOMMUFD);
+
+int iommufd_access_replace(struct iommufd_access *access, u32 ioas_id)
+{
+	int rc;
+
+	mutex_lock(&access->ioas_lock);
+	if (!access->ioas) {
+		mutex_unlock(&access->ioas_lock);
+		return -ENOENT;
+	}
+	if (access->ioas->obj.id == ioas_id) {
+		mutex_unlock(&access->ioas_lock);
+		return 0;
+	}
+
+	rc = iommufd_access_change_pt(access, ioas_id);
+	mutex_unlock(&access->ioas_lock);
+	return rc;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_access_replace, IOMMUFD);
 
 /**
  * iommufd_access_notify_unmap - Notify users of an iopt to stop using it
