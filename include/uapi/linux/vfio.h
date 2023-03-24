@@ -670,6 +670,43 @@ struct vfio_pci_hot_reset_info {
 #define VFIO_DEVICE_GET_PCI_HOT_RESET_INFO	_IO(VFIO_TYPE, VFIO_BASE + 12)
 
 /**
+ * VFIO_DEVICE_GET_PCI_HOT_RESET_GROUP_INFO - _IOWR(VFIO_TYPE, VFIO_BASE + 12,
+ *						    struct vfio_pci_hot_reset_group_info)
+ *
+ * This is used in the vfio device cdev mode.  It returns the list of
+ * affected devices (represented by iommufd dev_id) when hot reset is
+ * issued on the current device with which this ioctl is invoked.  It
+ * only includes the devices that are opened by the current user in the
+ * time of this command is invoked.  So user should re-invoke it when
+ * it has opened new devices.  This information gives user a scope of
+ * affected devices that is opened by it.  This is helpful for user to
+ * decide whether VFIO_DEVICE_PCI_HOT_RESET can be issued.  However,
+ * even user can do hot reset per the info got via this ioctl, hot reset
+ * can fail since the not-opened affected device can be opened by other
+ * users in the window between the two ioctls.  Detail can check the
+ * description of VFIO_DEVICE_PCI_HOT_RESET.
+ *
+ * Return: 0 on success, -errno on failure:
+ *	-enospc = insufficient buffer;
+ *	-enodev = unsupported for device;
+ *	-eperm = no permission for device, this error comes:
+ *		 - when there are affected devices that are opened but
+ *		   not bound to the same iommufd with the current device
+ *		   with which this ioctl is invoked,
+ *		 - there are affected devices that are not bound to vfio
+ *		   driver yet.
+ *		 - no valid iommufd is bound (e.g. noiommu mode)
+ */
+struct vfio_pci_hot_reset_group_info {
+	__u32	argsz;
+	__u32	flags;
+	__u32	count;
+	__u32	devices[];
+};
+
+#define VFIO_DEVICE_GET_PCI_HOT_RESET_GROUP_INFO	_IO(VFIO_TYPE, VFIO_BASE + 18)
+
+/**
  * VFIO_DEVICE_PCI_HOT_RESET - _IOW(VFIO_TYPE, VFIO_BASE + 13,
  *				    struct vfio_pci_hot_reset)
  *
