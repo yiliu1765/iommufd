@@ -63,6 +63,7 @@ struct vfio_device {
 	bool iommufd_attached;
 #endif
 	bool cdev_opened;
+	bool noiommu;
 };
 
 /**
