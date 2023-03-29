@@ -273,6 +273,12 @@ struct iommu_iotlb_gather {
  *                not implement .hw_info callback, this field is
  *                IOMMU_HW_INFO_TYPE_NONE which is 0. Hence, such drivers
  *                do not need to care this field.
+ * @hwpt_type_bitmap: bitmap of all the supported page table types defined
+ *                    as enum iommu_hwpt_type in include/uapi/linux/iommufd.h
+ *                    bit 0 of ops->hwpt_type_bitmap is not used as value 0
+ *                    of enum iommu_hwpt_type stands for a type which is
+ *                    supported by default. No need to check bitmap, hence
+ *                    it is not used.
  * @pgsize_bitmap: bitmap of all possible supported page sizes
  * @owner: Driver module providing these ops
  */
@@ -312,6 +318,7 @@ struct iommu_ops {
 
 	const struct iommu_domain_ops *default_domain_ops;
 	enum iommu_hw_info_type hw_info_type;
+	unsigned long long hwpt_type_bitmap;
 	unsigned long pgsize_bitmap;
 	struct module *owner;
 };
