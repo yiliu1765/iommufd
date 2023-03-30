@@ -345,10 +345,17 @@ struct iommufd_group {
 struct iommufd_device {
 	struct iommufd_object obj;
 	struct iommufd_ctx *ictx;
+	/* valid if this is a physical device */
 	struct iommufd_group *igroup;
 	struct list_head group_item;
 	/* always the physical device */
 	struct device *dev;
+	/*
+	 * valid if this is a virtual device which gains pasid-granular
+	 * DMA isolation in IOMMU. The default pasid is used when attaching
+	 * this device to a IOAS/hwpt.
+	 */
+	u32 rid_pasid;
 	struct xarray pasid_hwpts;
 	bool enforce_cache_coherency;
 };
