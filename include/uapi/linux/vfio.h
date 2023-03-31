@@ -650,11 +650,32 @@ enum {
  * VFIO_DEVICE_GET_PCI_HOT_RESET_INFO - _IOWR(VFIO_TYPE, VFIO_BASE + 12,
  *					      struct vfio_pci_hot_reset_info)
  *
+ * This command is used to query the affected devices in the hot reset for
+ * a given device.  User could use the information reported by this command
+ * to figure out the affected devices among the devices it has opened.
+ * This command always reports the segment, bus and devfn information for
+ * each affected device, and selectively report the group_id or the dev_id
+ * per the way how the device being queried is opened.
+ *	- If the device is opened via the traditional group/container manner,
+ *	  this command reports the group_id for each affected device.
+ *
+ *	- If the device is opened as a cdev, this command needs to report
+ *	  dev_id for each affected device and set the
+ *	  VFIO_PCI_HOT_RESET_FLAG_IOMMUFD_DEV_ID flag.  For the affected
+ *	  devices that are not opened as cdev or bound to different iommufds
+ *	  with the device that is queried, report an invalid dev_id to avoid
+ *	  potential dev_id conflict as dev_id is local to iommufd.  For such
+ *	  affected devices, user shall fall back to use the segment, bus and
+ *	  devfn info to map it to opened device.
+ *
  * Return: 0 on success, -errno on failure:
  *	-enospc = insufficient buffer, -enodev = unsupported for device.
  */
 struct vfio_pci_dependent_device {
-	__u32	group_id;
+	union {
+		__u32   group_id;
+		__u32	dev_id;
+	};
 	__u16	segment;
 	__u8	bus;
 	__u8	devfn; /* Use PCI_SLOT/PCI_FUNC */
@@ -663,6 +684,7 @@ struct vfio_pci_dependent_device {
 struct vfio_pci_hot_reset_info {
 	__u32	argsz;
 	__u32	flags;
+#define VFIO_PCI_HOT_RESET_FLAG_IOMMUFD_DEV_ID	(1 << 0)
 	__u32	count;
 	struct vfio_pci_dependent_device	devices[];
 };
