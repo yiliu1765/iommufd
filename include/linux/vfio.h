@@ -62,6 +62,7 @@ struct vfio_device {
 	struct iommufd_device *iommufd_device;
 	bool iommufd_attached;
 #endif
+	bool cdev_opened;
 };
 
 /**
@@ -150,6 +151,12 @@ vfio_iommufd_physical_devid(struct vfio_device *vdev, u32 *id)
 #define vfio_iommufd_emulated_attach_ioas \
 	((int (*)(struct vfio_device *vdev, u32 *pt_id)) NULL)
 #endif
+
+static inline bool vfio_device_cdev_opened(struct vfio_device *device)
+{
+	lockdep_assert_held(&device->dev_set->lock);
+	return device->cdev_opened;
+}
 
 /**
  * @migration_set_state: Optional callback to change the migration state for
