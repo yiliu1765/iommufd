@@ -303,6 +303,7 @@ struct iommufd_device {
 	 * this device to a IOAS/hwpt.
 	 */
 	u32 default_pasid;
+	struct xarray pasid_hwpts;
 	bool enforce_cache_coherency;
 	phys_addr_t sw_msi_start;
 };
