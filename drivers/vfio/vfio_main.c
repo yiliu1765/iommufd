@@ -320,6 +320,12 @@ void vfio_unregister_group_dev(struct vfio_device *device)
 	bool interrupted = false;
 	long rc;
 
+	/*
+	 * Prevent new device opened by userspace via the
+	 * VFIO_GROUP_GET_DEVICE_FD in the group path.
+	 */
+	vfio_device_group_unregister(device);
+
 	vfio_device_put_registration(device);
 	rc = try_wait_for_completion(&device->comp);
 	while (rc <= 0) {
@@ -342,8 +348,6 @@ void vfio_unregister_group_dev(struct vfio_device *device)
 			}
 		}
 	}
-
-	vfio_device_group_unregister(device);
 
 	/* Balances device_add in register path */
 	device_del(&device->device);
