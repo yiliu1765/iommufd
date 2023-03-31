@@ -49,6 +49,14 @@ enum vfio_group_type {
 	VFIO_IOMMU,
 
 	/*
+	 * Virtual device with IOMMU backing. The user of these devices can
+	 * trigger DMAs which are all tagged with a pasid. Pasid itself is
+	 * a device resource so there is no group associated. The VFIO core
+	 * doesn't create a vfio_group for such devices.
+	 */
+	VFIO_PASID_IOMMU,
+
+	/*
 	 * Virtual device without IOMMU backing. The VFIO core fakes up an
 	 * iommu_group as the iommu_group sysfs interface is part of the
 	 * userspace ABI.  The user of these devices must not be able to
@@ -116,7 +124,7 @@ void vfio_group_cleanup(void);
 static inline bool vfio_device_is_noiommu(struct vfio_device *vdev)
 {
 	return IS_ENABLED(CONFIG_VFIO_NOIOMMU) &&
-	       vdev->group->type == VFIO_NO_IOMMU;
+	       vdev->group && vdev->group->type == VFIO_NO_IOMMU;
 }
 #else
 struct vfio_group;
