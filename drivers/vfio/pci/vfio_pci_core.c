@@ -30,6 +30,7 @@
 #if IS_ENABLED(CONFIG_EEH)
 #include <asm/eeh.h>
 #endif
+#include <uapi/linux/iommufd.h>
 
 #include "vfio_pci_priv.h"
 
@@ -767,6 +768,20 @@ static int vfio_pci_get_irq_count(struct vfio_pci_core_device *vdev, int irq_typ
 	return 0;
 }
 
+static struct vfio_device *
+vfio_pci_find_device_in_devset(struct vfio_device_set *dev_set,
+			       struct pci_dev *pdev)
+{
+	struct vfio_device *cur;
+
+	lockdep_assert_held(&dev_set->lock);
+
+	list_for_each_entry(cur, &dev_set->device_list, dev_set_list)
+		if (cur->dev == &pdev->dev)
+			return cur;
+	return NULL;
+}
+
 static int vfio_pci_count_devs(struct pci_dev *pdev, void *data)
 {
 	(*(int *)data)++;
@@ -776,13 +791,20 @@ static int vfio_pci_count_devs(struct pci_dev *pdev, void *data)
 struct vfio_pci_fill_info {
 	int max;
 	int cur;
+	bool require_devid;
+	struct iommufd_ctx *iommufd;
+	struct vfio_device_set *dev_set;
 	struct vfio_pci_dependent_device *devices;
 };
 
 static int vfio_pci_fill_devs(struct pci_dev *pdev, void *data)
 {
 	struct vfio_pci_fill_info *fill = data;
+	struct vfio_device_set *dev_set = fill->dev_set;
 	struct iommu_group *iommu_group;
+	struct vfio_device *vdev;
+
+	lockdep_assert_held(&dev_set->lock);
 
 	if (fill->cur == fill->max)
 		return -EAGAIN; /* Something changed, try again */
@@ -791,7 +813,21 @@ static int vfio_pci_fill_devs(struct pci_dev *pdev, void *data)
 	if (!iommu_group)
 		return -EPERM; /* Cannot reset non-isolated devices */
 
-	fill->devices[fill->cur].group_id = iommu_group_id(iommu_group);
+	if (fill->require_devid) {
+		/*
+		 * Report dev_id of the devices that are opened as cdev
+		 * and have the same iommufd with the fill->iommufd.
+		 * Otherwise, just fill IOMMUFD_INVALID_ID.
+		 */
+		vdev = vfio_pci_find_device_in_devset(dev_set, pdev);
+		if (vdev && vfio_device_cdev_opened(vdev) &&
+		    fill->iommufd == vfio_iommufd_physical_ictx(vdev))
+			vfio_iommufd_physical_devid(vdev, &fill->devices[fill->cur].dev_id);
+		else
+			fill->devices[fill->cur].dev_id = IOMMUFD_INVALID_ID;
+	} else {
+		fill->devices[fill->cur].group_id = iommu_group_id(iommu_group);
+	}
 	fill->devices[fill->cur].segment = pci_domain_nr(pdev->bus);
 	fill->devices[fill->cur].bus = pdev->bus->number;
 	fill->devices[fill->cur].devfn = pdev->devfn;
@@ -1230,17 +1266,27 @@ static int vfio_pci_ioctl_get_pci_hot_reset_info(
 		return -ENOMEM;
 
 	fill.devices = devices;
+	fill.dev_set = vdev->vdev.dev_set;
 
+	mutex_lock(&vdev->vdev.dev_set->lock);
+	if (vfio_device_cdev_opened(&vdev->vdev)) {
+		fill.require_devid = true;
+		fill.iommufd = vfio_iommufd_physical_ictx(&vdev->vdev);
+	}
 	ret = vfio_pci_for_each_slot_or_bus(vdev->pdev, vfio_pci_fill_devs,
 					    &fill, slot);
+	mutex_unlock(&vdev->vdev.dev_set->lock);
 
 	/*
 	 * If a device was removed between counting and filling, we may come up
 	 * short of fill.max.  If a device was added, we'll have a return of
 	 * -EAGAIN above.
 	 */
-	if (!ret)
+	if (!ret) {
 		hdr.count = fill.cur;
+		if (fill.require_devid)
+			hdr.flags = VFIO_PCI_HOT_RESET_FLAG_IOMMUFD_DEV_ID;
+	}
 
 reset_info_exit:
 	if (copy_to_user(arg, &hdr, minsz))
@@ -2346,12 +2392,10 @@ static bool vfio_dev_in_files(struct vfio_pci_core_device *vdev,
 static int vfio_pci_is_device_in_set(struct pci_dev *pdev, void *data)
 {
 	struct vfio_device_set *dev_set = data;
-	struct vfio_device *cur;
 
-	list_for_each_entry(cur, &dev_set->device_list, dev_set_list)
-		if (cur->dev == &pdev->dev)
-			return 0;
-	return -EBUSY;
+	lockdep_assert_held(&dev_set->lock);
+
+	return vfio_pci_find_device_in_devset(dev_set, pdev) ? 0 : -EBUSY;
 }
 
 /*
