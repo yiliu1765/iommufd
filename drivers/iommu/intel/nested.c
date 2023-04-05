@@ -153,8 +153,10 @@ struct iommu_domain *intel_nested_domain_alloc(struct iommu_domain *s2_domain,
 					       const struct iommu_user_data *user_data)
 {
 	const size_t min_len = offsetofend(struct iommu_hwpt_vtd_s1, __reserved);
+	struct dmar_domain *s2_dmar_domain = to_dmar_domain(s2_domain);
 	struct iommu_hwpt_vtd_s1 vtd;
 	struct dmar_domain *domain;
+	unsigned long flags;
 	int ret;
 
 	ret = iommu_copy_user_data(&vtd, user_data, sizeof(vtd), min_len);
@@ -165,8 +167,18 @@ struct iommu_domain *intel_nested_domain_alloc(struct iommu_domain *s2_domain,
 	if (!domain)
 		return NULL;
 
+	spin_lock_irqsave(&s2_dmar_domain->lock, flags);
+	if (s2_dmar_domain->read_only_mapped) {
+		spin_unlock_irqrestore(&s2_dmar_domain->lock, flags);
+		pr_err_ratelimited("Nested configuration is disallowed when the stage-2 domain already has read-only mappings, due to HW errata (ERRATA_772415_SPR17)\n");
+		kfree(domain);
+		return NULL;
+	}
+	s2_dmar_domain->is_nested_parent = true;
+	spin_unlock_irqrestore(&s2_dmar_domain->lock, flags);
+
 	domain->use_first_level = true;
-	domain->s2_domain = to_dmar_domain(s2_domain);
+	domain->s2_domain = s2_dmar_domain;
 	domain->s1_pgtbl = vtd.pgtbl_addr;
 	domain->s1_cfg = vtd;
 	/*
