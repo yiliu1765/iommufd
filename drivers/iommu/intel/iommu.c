@@ -2138,6 +2138,7 @@ __domain_mapping(struct dmar_domain *domain, unsigned long iov_pfn,
 	struct dma_pte *first_pte = NULL, *pte = NULL;
 	unsigned int largepage_lvl = 0;
 	unsigned long lvl_pages = 0;
+	unsigned long flags;
 	phys_addr_t pteval;
 	u64 attr;
 
@@ -2146,6 +2147,18 @@ __domain_mapping(struct dmar_domain *domain, unsigned long iov_pfn,
 
 	if ((prot & (DMA_PTE_READ|DMA_PTE_WRITE)) == 0)
 		return -EINVAL;
+
+	if (!(prot & DMA_PTE_WRITE) && !domain->read_only_mapped) {
+		spin_lock_irqsave(&domain->lock, flags);
+		if (domain->set_nested) {
+			pr_err_ratelimited("No read-only mapping permitted\n");
+			spin_unlock_irqrestore(&domain->lock, flags);
+			return -EINVAL;
+		}
+
+		domain->read_only_mapped = true;
+		spin_unlock_irqrestore(&domain->lock, flags);
+	}
 
 	attr = prot & (DMA_PTE_READ | DMA_PTE_WRITE | DMA_PTE_SNP);
 	attr |= DMA_FL_PTE_PRESENT;
@@ -4758,6 +4771,7 @@ static void *intel_iommu_hw_info(struct device *dev, u32 *length)
 	if (!vtd)
 		return ERR_PTR(-ENOMEM);
 
+	vtd->flags = IOMMU_HW_INFO_VTD_ERRATA_772415_SPR17;
 	vtd->cap_reg = iommu->cap;
 	vtd->ecap_reg = iommu->ecap;
 	*length = sizeof(*vtd);
