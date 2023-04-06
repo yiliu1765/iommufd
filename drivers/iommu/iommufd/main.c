@@ -16,11 +16,13 @@
 #include <linux/mutex.h>
 #include <linux/bug.h>
 #include <uapi/linux/iommufd.h>
+#include <linux/iommu.h>
 #include <linux/iommufd.h>
 
 #include "io_pagetable.h"
 #include "iommufd_private.h"
 #include "iommufd_test.h"
+#include "../iommu-priv.h"
 
 struct iommufd_object_ops {
 	void (*destroy)(struct iommufd_object *obj);
@@ -303,6 +305,71 @@ static int iommufd_option(struct iommufd_ucmd *ucmd)
 	return 0;
 }
 
+static int iommufd_set_dev_data(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_set_dev_data *cmd = ucmd->cmd;
+	struct iommu_user_data user_data = {
+		.uptr = u64_to_user_ptr(cmd->data_uptr),
+		.len = cmd->data_len,
+	};
+	struct iommufd_device *idev;
+	const struct iommu_ops *ops;
+	int rc;
+
+	if (!cmd->data_uptr || !cmd->data_len)
+		return -EINVAL;
+
+	idev = iommufd_get_device(ucmd, cmd->dev_id);
+	if (IS_ERR(idev))
+		return PTR_ERR(idev);
+
+	mutex_lock(&idev->igroup->lock);
+	if (idev->has_user_data) {
+		rc = -EEXIST;
+		goto out_unlock;
+	}
+
+	ops = dev_iommu_ops(idev->dev);
+	if (!ops->set_dev_user_data || !ops->unset_dev_user_data) {
+		rc = -EOPNOTSUPP;
+		goto out_unlock;
+	}
+
+	rc = ops->set_dev_user_data(idev->dev, &user_data);
+	if (rc)
+		goto out_unlock;
+
+	idev->has_user_data = true;
+out_unlock:
+	mutex_unlock(&idev->igroup->lock);
+	iommufd_put_object(&idev->obj);
+	return rc;
+}
+
+static int iommufd_unset_dev_data(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_unset_dev_data *cmd = ucmd->cmd;
+	struct iommufd_device *idev;
+	int rc = 0;
+
+	idev = iommufd_get_device(ucmd, cmd->dev_id);
+	if (IS_ERR(idev))
+		return PTR_ERR(idev);
+
+	mutex_lock(&idev->igroup->lock);
+	if (!idev->has_user_data) {
+		rc = -ENOENT;
+		goto out_unlock;
+	}
+
+	dev_iommu_ops(idev->dev)->unset_dev_user_data(idev->dev);
+	idev->has_user_data = false;
+out_unlock:
+	mutex_unlock(&idev->igroup->lock);
+	iommufd_put_object(&idev->obj);
+	return rc;
+}
+
 union ucmd_buffer {
 	struct iommu_destroy destroy;
 	struct iommu_hw_info info;
@@ -315,6 +382,8 @@ union ucmd_buffer {
 	struct iommu_ioas_map map;
 	struct iommu_ioas_unmap unmap;
 	struct iommu_option option;
+	struct iommu_set_dev_data set_dev_data;
+	struct iommu_unset_dev_data unset_dev_data;
 	struct iommu_vfio_ioas vfio_ioas;
 #ifdef CONFIG_IOMMUFD_TEST
 	struct iommu_test_cmd test;
@@ -359,6 +428,10 @@ static const struct iommufd_ioctl_op iommufd_ioctl_ops[] = {
 		 length),
 	IOCTL_OP(IOMMU_OPTION, iommufd_option, struct iommu_option,
 		 val64),
+	IOCTL_OP(IOMMU_SET_DEV_DATA, iommufd_set_dev_data,
+		 struct iommu_set_dev_data, data_len),
+	IOCTL_OP(IOMMU_UNSET_DEV_DATA, iommufd_unset_dev_data,
+		 struct iommu_unset_dev_data, dev_id),
 	IOCTL_OP(IOMMU_VFIO_IOAS, iommufd_vfio_ioas, struct iommu_vfio_ioas,
 		 __reserved),
 #ifdef CONFIG_IOMMUFD_TEST
