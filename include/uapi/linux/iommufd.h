@@ -707,6 +707,16 @@ struct iommu_hwpt_invalidate {
 #define IOMMU_HWPT_INVALIDATE _IO(IOMMUFD_TYPE, IOMMUFD_CMD_HWPT_INVALIDATE)
 
 /**
+ * struct iommu_device_data_arm_smmuv3 - ARM SMMUv3 specific device data
+ * @sid: The Stream ID that is assigned in the user space
+ *
+ * This should be passed via the VFIO_DEVICE_BIND_IOMMUFD ioctl.
+ */
+struct iommu_device_data_arm_smmuv3 {
+	__u32 sid;
+};
+
+/**
  * struct iommu_set_dev_data - ioctl(IOMMU_SET_DEV_DATA)
  * @size: sizeof(struct iommu_set_dev_data)
  * @dev_id: The device to set an iommu specific device data
