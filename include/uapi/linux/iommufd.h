@@ -681,6 +681,19 @@ struct iommu_hwpt_invalidate {
  */
 enum iommu_idev_data_type {
 	IOMMU_IDEV_DATA_NONE,
+	IOMMU_IDEV_DATA_ARM_SMMUV3,
+};
+
+/**
+ * struct iommu_idev_data_arm_smmuv3 - ARM SMMUv3 specific device data
+ * @sid: The Stream ID that is assigned in the user space
+ *
+ * The SMMUv3 specific user space data for a device that is behind an SMMU HW.
+ * The guest-level user data should be linked to the host-level kernel data,
+ * which will be used by user space cache invalidation commands.
+ */
+struct iommu_idev_data_arm_smmuv3 {
+	__u32 sid;
 };
 
 /**
