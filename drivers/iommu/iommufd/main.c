@@ -315,6 +315,8 @@ union ucmd_buffer {
 	struct iommu_ioas_map map;
 	struct iommu_ioas_unmap unmap;
 	struct iommu_option option;
+	struct iommu_set_idev_data set_idev_data;
+	struct iommu_unset_idev_data unset_idev_data;
 	struct iommu_vfio_ioas vfio_ioas;
 #ifdef CONFIG_IOMMUFD_TEST
 	struct iommu_test_cmd test;
@@ -359,6 +361,10 @@ static const struct iommufd_ioctl_op iommufd_ioctl_ops[] = {
 		 length),
 	IOCTL_OP(IOMMU_OPTION, iommufd_option, struct iommu_option,
 		 val64),
+	IOCTL_OP(IOMMU_SET_IDEV_DATA, iommufd_set_idev_data,
+		 struct iommu_set_idev_data, data_len),
+	IOCTL_OP(IOMMU_UNSET_IDEV_DATA, iommufd_unset_idev_data,
+		 struct iommu_unset_idev_data, dev_id),
 	IOCTL_OP(IOMMU_VFIO_IOAS, iommufd_vfio_ioas, struct iommu_vfio_ioas,
 		 __reserved),
 #ifdef CONFIG_IOMMUFD_TEST
