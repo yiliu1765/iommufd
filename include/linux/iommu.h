@@ -254,6 +254,15 @@ union iommu_cache_invalidate_user_data {
 #endif
 };
 
+/*
+ * The iommu specific user data to set for a device
+ *
+ * This includes the corresponding driver data structures in
+ * include/uapi/linux/iommufd.h.
+ */
+union iommu_set_dev_data_user_data {
+};
+
 /**
  * struct iommu_user_data_len - range of userspace data length
  *
@@ -322,6 +331,14 @@ struct iommu_user_data_len {
  * @remove_dev_pasid: Remove any translation configurations of a specific
  *                    pasid, so that any DMA transactions with this pasid
  *                    will be blocked by the hardware.
+ * @set/unset_dev_user_data: set/unset an iommu specific device data from user
+ *                           space. The user device data info will be used by
+ *                           the driver to take care of user space requests.
+ *                           The device data structure must be defined in
+ *                           include/uapi/linux/iommufd.h.
+ * @dev_user_data_len: A driver that supports an @user_data input for
+ *                     @set_dev_user_data must provide its length range
+ *                     core to run a data length validation.
  * @pgsize_bitmap: bitmap of all possible supported page sizes
  * @owner: Driver module providing these ops
  */
@@ -359,6 +376,11 @@ struct iommu_ops {
 
 	int (*def_domain_type)(struct device *dev);
 	void (*remove_dev_pasid)(struct device *dev, ioasid_t pasid);
+
+	int (*set_dev_user_data)(struct device *dev,
+			const union iommu_set_dev_data_user_data *user_data);
+	void (*unset_dev_user_data)(struct device *dev);
+	const struct iommu_user_data_len dev_user_data_len;
 
 	const struct iommu_domain_ops *default_domain_ops;
 	unsigned long pgsize_bitmap;
