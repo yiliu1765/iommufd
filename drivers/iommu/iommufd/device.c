@@ -282,7 +282,7 @@ int iommufd_device_get_hw_info(struct iommufd_ucmd *ucmd)
 	struct iommufd_device *idev;
 	const struct iommu_ops *ops;
 	void *data = NULL;
-	int rc;
+	int rc = 0;
 
 	if (cmd->flags || cmd->__reserved || !cmd->data_len)
 		return -EOPNOTSUPP;
@@ -293,28 +293,27 @@ int iommufd_device_get_hw_info(struct iommufd_ucmd *ucmd)
 
 	ops = dev_iommu_ops(idev->dev);
 	if (!ops->hw_info) {
-		rc = 0;
 		length = 0;
-		goto out;
+		goto done;
 	}
 
 	/* driver has hw_info callback should have a unique hw_info_type */
 	if (ops->hw_info_type == IOMMU_HW_INFO_TYPE_NONE) {
 		pr_warn_ratelimited("iommu driver set an invalid type\n");
 		rc = -ENODEV;
-		goto out;
+		goto out_err;
 	}
 
 	data = ops->hw_info(idev->dev, &data_len);
 	if (IS_ERR(data)) {
 		rc = PTR_ERR(data);
-		goto out;
+		goto out_err;
 	}
 
 	length = min(cmd->data_len, data_len);
 	if (copy_to_user(u64_to_user_ptr(cmd->data_ptr), data, length)) {
 		rc = -EFAULT;
-		goto out;
+		goto out_err;
 	}
 
 	/*
@@ -324,16 +323,17 @@ int iommufd_device_get_hw_info(struct iommufd_ucmd *ucmd)
 	if (length < cmd->data_len) {
 		rc = iommufd_zero_fill_user(cmd->data_ptr + length,
 					    cmd->data_len - length);
+		if (rc)
+			goto out_err;
 	}
 
-out:
-	if (!rc) {
-		cmd->out_data_type = ops->hw_info_type;
-		cmd->data_len = length;
-		cmd->out_hwpt_type_bitmap = ops->hwpt_type_bitmap;
-		rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
-	}
+done:
+	cmd->out_data_type = ops->hw_info_type;
+	cmd->data_len = length;
+	cmd->out_hwpt_type_bitmap = ops->hwpt_type_bitmap;
+	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
 
+out_err:
 	kfree(data);
 	iommufd_put_object(&idev->obj);
 	return rc;

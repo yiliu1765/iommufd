@@ -305,7 +305,7 @@ struct iommu_ops {
 
 	const struct iommu_domain_ops *default_domain_ops;
 	enum iommu_hw_info_type hw_info_type;
-	unsigned long hwpt_type_bitmap;
+	unsigned long long hwpt_type_bitmap;
 	unsigned long pgsize_bitmap;
 	struct module *owner;
 };

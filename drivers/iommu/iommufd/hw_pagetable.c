@@ -117,8 +117,10 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 
 	/* It must be either NESTED or UNMANAGED, depending on parent_domain */
 	if (WARN_ON((parent_domain && hwpt->domain->type != IOMMU_DOMAIN_NESTED) ||
-	            (!parent_domain && hwpt->domain->type != IOMMU_DOMAIN_UNMANAGED)))
+	            (!parent_domain && hwpt->domain->type != IOMMU_DOMAIN_UNMANAGED))) {
+		rc = -EINVAL;
 		goto out_abort;
+	}
 
 	/*
 	 * Set the coherency mode before we do iopt_table_add_domain() as some
@@ -181,8 +183,8 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	struct iommufd_device *idev;
 	struct iommufd_ioas *ioas;
 	void *data = NULL;
-	u32 klen;
-	int rc;
+	u32 klen = 0;
+	int rc = 0;
 
 	if (cmd->flags || cmd->__reserved)
 		return -EOPNOTSUPP;
