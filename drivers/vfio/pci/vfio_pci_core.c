@@ -27,6 +27,7 @@
 #include <linux/vgaarb.h>
 #include <linux/nospec.h>
 #include <linux/sched/mm.h>
+#include <linux/iommufd.h>
 #if IS_ENABLED(CONFIG_EEH)
 #include <asm/eeh.h>
 #endif
@@ -35,6 +36,10 @@
 
 #define DRIVER_AUTHOR   "Alex Williamson <alex.williamson@redhat.com>"
 #define DRIVER_DESC "core driver for VFIO based PCI devices"
+
+#ifdef CONFIG_IOMMUFD
+MODULE_IMPORT_NS(IOMMUFD);
+#endif
 
 static bool nointxmask;
 static bool disable_vga;
@@ -776,6 +781,9 @@ struct vfio_pci_fill_info {
 	int max;
 	int cur;
 	struct vfio_pci_dependent_device *devices;
+	struct vfio_device *vdev;
+	bool devid:1;
+	bool dev_owned:1;
 };
 
 static int vfio_pci_fill_devs(struct pci_dev *pdev, void *data)
@@ -790,7 +798,37 @@ static int vfio_pci_fill_devs(struct pci_dev *pdev, void *data)
 	if (!iommu_group)
 		return -EPERM; /* Cannot reset non-isolated devices */
 
-	fill->devices[fill->cur].group_id = iommu_group_id(iommu_group);
+	if (fill->devid) {
+		struct iommufd_ctx *iommufd = vfio_iommufd_physical_ictx(fill->vdev);
+		struct vfio_device_set *dev_set = fill->vdev->dev_set;
+		struct vfio_device *vdev;
+
+		/*
+		 * Report devid for the affected devices:
+		 * - valid devid > 0 for the devices that are bound with
+		 *   the iommufd of the calling device.
+		 * - devid == 0 for the devices that have not been opened
+		 *   but have same group with one of the devices bound to
+		 *   the iommufd of the calling device.
+		 * - devid == -1 for others, and clear dev_owned flag.
+		 */
+		vdev = vfio_find_device_in_devset(dev_set, &pdev->dev);
+		if (vdev && iommufd == vfio_iommufd_physical_ictx(vdev)) {
+			int ret;
+
+			ret = vfio_iommufd_physical_devid(vdev);
+			if (WARN_ON(ret < 0))
+				return ret;
+			fill->devices[fill->cur].devid = ret;
+		} else if (vdev && iommufd_ctx_has_group(iommufd, iommu_group)) {
+			fill->devices[fill->cur].devid = VFIO_PCI_DEVID_OWNED;
+		} else {
+			fill->devices[fill->cur].devid = VFIO_PCI_DEVID_NOT_OWNED;
+			fill->dev_owned = false;
+		}
+	} else {
+		fill->devices[fill->cur].group_id = iommu_group_id(iommu_group);
+	}
 	fill->devices[fill->cur].segment = pci_domain_nr(pdev->bus);
 	fill->devices[fill->cur].bus = pdev->bus->number;
 	fill->devices[fill->cur].devfn = pdev->devfn;
@@ -1229,17 +1267,27 @@ static int vfio_pci_ioctl_get_pci_hot_reset_info(
 		return -ENOMEM;
 
 	fill.devices = devices;
+	fill.vdev = &vdev->vdev;
 
+	mutex_lock(&vdev->vdev.dev_set->lock);
+	fill.devid = fill.dev_owned = vfio_device_cdev_opened(&vdev->vdev);
 	ret = vfio_pci_for_each_slot_or_bus(vdev->pdev, vfio_pci_fill_devs,
 					    &fill, slot);
+	mutex_unlock(&vdev->vdev.dev_set->lock);
 
 	/*
 	 * If a device was removed between counting and filling, we may come up
 	 * short of fill.max.  If a device was added, we'll have a return of
 	 * -EAGAIN above.
 	 */
-	if (!ret)
+	if (!ret) {
 		hdr.count = fill.cur;
+		if (fill.devid) {
+			hdr.flags |= VFIO_PCI_HOT_RESET_FLAG_DEV_ID;
+			if (fill.dev_owned)
+				hdr.flags |= VFIO_PCI_HOT_RESET_FLAG_DEV_ID_OWNED;
+		}
+	}
 
 reset_info_exit:
 	if (copy_to_user(arg, &hdr, minsz))
