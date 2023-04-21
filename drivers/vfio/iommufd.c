@@ -66,6 +66,55 @@ void vfio_iommufd_unbind(struct vfio_device *vdev)
 		vdev->ops->unbind_iommufd(vdev);
 }
 
+struct iommufd_ctx *vfio_iommufd_device_ictx(struct vfio_device *vdev)
+{
+	if (vdev->iommufd_device)
+		return iommufd_device_to_ictx(vdev->iommufd_device);
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_device_ictx);
+
+static int vfio_iommufd_device_id(struct vfio_device *vdev)
+{
+	if (vdev->iommufd_device)
+		return iommufd_device_to_id(vdev->iommufd_device);
+	return -EINVAL;
+}
+
+/*
+ * Return devid for a device which is affected by hot-reset.
+ * - valid devid > 0 for the device that is bound to the input
+ *   iommufd_ctx.
+ * - devid == VFIO_PCI_DEVID_OWNED for the device that has not
+ *   been bound to any iommufd_ctx but other device within its
+ *   group has been bound to the input iommufd_ctx.
+ * - devid == VFIO_PCI_DEVID_NOT_OWNED for others. e.g. device
+ *   is bound to other iommufd_ctx etc.
+ */
+int vfio_iommufd_device_hot_reset_devid(struct vfio_device *vdev,
+					struct iommufd_ctx *ictx)
+{
+	struct iommu_group *group;
+	int devid;
+
+	if (vfio_iommufd_device_ictx(vdev) == ictx)
+		return vfio_iommufd_device_id(vdev);
+
+	group = iommu_group_get(vdev->dev);
+	if (!group)
+		return VFIO_PCI_DEVID_NOT_OWNED;
+
+	if (iommufd_ctx_has_group(ictx, group))
+		devid = VFIO_PCI_DEVID_OWNED;
+	else
+		devid = VFIO_PCI_DEVID_NOT_OWNED;
+
+	iommu_group_put(group);
+
+	return devid;
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_device_hot_reset_devid);
+
 /*
  * The physical standard ops mean that the iommufd_device is bound to the
  * physical device vdev->dev that was provided to vfio_init_group_dev(). Drivers
