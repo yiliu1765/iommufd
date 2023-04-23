@@ -261,6 +261,9 @@ union iommu_cache_invalidate_user_data {
  * include/uapi/linux/iommufd.h.
  */
 union iommu_set_dev_data_user_data {
+#ifdef CONFIG_IOMMUFD_TEST
+	__u32 test;
+#endif
 };
 
 /**
