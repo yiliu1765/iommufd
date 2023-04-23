@@ -495,3 +495,66 @@ static int _test_cmd_get_hw_info(int fd, __u32 device_id,
 	EXPECT_ERRNO(_errno,                                    \
 		     _test_cmd_get_hw_info(self->fd, device_id, \
 					   data, data_len))
+
+#define test_cmd_dev_check_data(device_id, expected)                           \
+	({                                                                     \
+		struct iommu_test_cmd test_cmd = {                             \
+			.size = sizeof(test_cmd),                              \
+			.op = IOMMU_TEST_OP_DEV_CHECK_DATA,                    \
+			.id = device_id,                                       \
+			.check_dev_data = { .val = expected },                 \
+		};                                                             \
+		ASSERT_EQ(0,                                                   \
+			  ioctl(self->fd,                                      \
+				_IOMMU_TEST_CMD(IOMMU_TEST_OP_DEV_CHECK_DATA), \
+				&test_cmd));                                   \
+	})
+
+static int _test_cmd_set_idev_data(int fd, __u32 device_id, __u32 data_type,
+				   struct iommu_test_device_data *dev_data)
+{
+	struct iommu_set_idev_data cmd = {
+		.size = sizeof(cmd),
+		.dev_id = device_id,
+		.data_uptr = (uint64_t)dev_data,
+		.data_type = data_type,
+		.data_len = sizeof(*dev_data),
+	};
+	int ret;
+
+	ret = ioctl(fd, IOMMU_SET_IDEV_DATA, &cmd);
+	if (ret)
+		return ret;
+	return 0;
+}
+
+#define test_cmd_set_idev_data(device_id, dev_data)                    \
+	ASSERT_EQ(0, _test_cmd_set_idev_data(self->fd, device_id,      \
+					     IOMMU_IDEV_DATA_SELFTEST, \
+					     dev_data))
+
+#define test_err_set_idev_data(_errno, device_id, data_type, dev_data)       \
+	EXPECT_ERRNO(_errno,                                                 \
+		     _test_cmd_set_idev_data(self->fd, device_id, data_type, \
+			     		     dev_data))
+
+static int _test_cmd_unset_idev_data(int fd, __u32 device_id)
+{
+	struct iommu_unset_idev_data cmd = {
+		.size = sizeof(cmd),
+		.dev_id = device_id,
+	};
+	int ret;
+
+	ret = ioctl(fd, IOMMU_UNSET_IDEV_DATA, &cmd);
+	if (ret)
+		return ret;
+	return 0;
+}
+
+#define test_cmd_unset_idev_data(device_id) \
+	ASSERT_EQ(0, _test_cmd_unset_idev_data(self->fd, device_id))
+
+#define test_err_unset_idev_data(_errno, device_id) \
+	EXPECT_ERRNO(_errno,                        \
+		     _test_cmd_unset_idev_data(self->fd, device_id))
