@@ -103,6 +103,7 @@ enum selftest_obj_type {
 
 struct mock_dev {
 	struct device dev;
+	u32 dev_data;
 };
 
 struct selftest_obj {
@@ -383,6 +384,28 @@ static struct iommu_device *mock_probe_device(struct device *dev)
 	return &mock_iommu_device;
 }
 
+static int mock_domain_set_dev_data_user(struct device *dev,
+					 const struct iommu_user_data *user_data)
+{
+	struct mock_dev *mdev = container_of(dev, struct mock_dev, dev);
+	struct iommu_test_device_data data;
+	int rc;
+
+	rc = iommu_copy_struct_from_user(&data, user_data,
+					 IOMMU_IDEV_DATA_SELFTEST, val);
+	if (rc)
+		return rc;
+	mdev->dev_data = data.val;
+	return 0;
+}
+
+static void mock_domain_unset_dev_data_user(struct device *dev)
+{
+	struct mock_dev *mdev = container_of(dev, struct mock_dev, dev);
+
+	mdev->dev_data = 0;
+}
+
 static const struct iommu_ops mock_ops = {
 	.owner = THIS_MODULE,
 	.pgsize_bitmap = MOCK_IO_PAGE_SIZE,
@@ -393,6 +416,8 @@ static const struct iommu_ops mock_ops = {
 	.set_platform_dma_ops = mock_domain_set_plaform_dma_ops,
 	.device_group = generic_device_group,
 	.probe_device = mock_probe_device,
+	.set_dev_data_user = mock_domain_set_dev_data_user,
+	.unset_dev_data_user = mock_domain_unset_dev_data_user,
 	.default_domain_ops =
 		&(struct iommu_domain_ops){
 			.free = mock_domain_free,
@@ -785,6 +810,24 @@ static int iommufd_test_md_check_iotlb(struct iommufd_ucmd *ucmd,
 	    mock_nested->iotlb[iotlb_id] != iotlb)
 		rc = -EINVAL;
 	iommufd_put_object(&hwpt->obj);
+	return rc;
+}
+
+static int iommufd_test_dev_check_data(struct iommufd_ucmd *ucmd,
+				       u32 dev_id, u32 val)
+{
+	struct iommufd_device *idev;
+	struct mock_dev *mdev;
+	int rc = 0;
+
+	idev = iommufd_get_device(ucmd, dev_id);
+	if (IS_ERR(idev))
+		return PTR_ERR(idev);
+	mdev = container_of(idev->dev, struct mock_dev, dev);
+
+	if (mdev->dev_data != val)
+		rc = -EINVAL;
+	iommufd_put_object(&idev->obj);
 	return rc;
 }
 
@@ -1205,6 +1248,9 @@ int iommufd_test(struct iommufd_ucmd *ucmd)
 		return iommufd_test_md_check_iotlb(ucmd, cmd->id,
 						   cmd->check_iotlb.id,
 						   cmd->check_iotlb.iotlb);
+	case IOMMU_TEST_OP_DEV_CHECK_DATA:
+		return iommufd_test_dev_check_data(ucmd, cmd->id,
+						   cmd->check_dev_data.val);
 	case IOMMU_TEST_OP_CREATE_ACCESS:
 		return iommufd_test_create_access(ucmd, cmd->id,
 						  cmd->create_access.flags);
