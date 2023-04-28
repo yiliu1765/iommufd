@@ -512,6 +512,58 @@ struct iommu_hw_info {
 #define IOMMU_DEVICE_GET_HW_INFO _IO(IOMMUFD_TYPE, IOMMUFD_CMD_DEVICE_GET_HW_INFO)
 
 /**
+ * enum iommu_vtd_qi_granularity - Intel VT-d specific granularity of
+ *                                 queued invalidation
+ * @IOMMU_VTD_QI_GRAN_DOMAIN: domain-selective invalidation
+ * @IOMMU_VTD_QI_GRAN_ADDR: page-selective invalidation
+ */
+enum iommu_vtd_qi_granularity {
+	IOMMU_VTD_QI_GRAN_DOMAIN,
+	IOMMU_VTD_QI_GRAN_ADDR,
+};
+
+/**
+ * enum iommu_hwpt_intel_vtd_invalidate_flags - Flags for Intel VT-d
+ *                                              stage-1 page table cache
+ *                                              invalidation
+ * @IOMMU_VTD_QI_FLAGS_LEAF: The LEAF flag indicates whether only the
+ *                           leaf PTE caching needs to be invalidated
+ *                           and other paging structure caches can be
+ *                           preserved.
+ */
+enum iommu_hwpt_intel_vtd_invalidate_flags {
+	IOMMU_VTD_QI_FLAGS_LEAF = 1 << 0,
+};
+
+/**
+ * struct iommu_hwpt_invalidate_intel_vtd - Intel VT-d cache invalidation info
+ * @flags: Combination of enum iommu_hwpt_intel_vtd_invalidate_flags
+ * @granularity: One of enum iommu_vtd_qi_granularity.
+ * @addr: The start address of the addresses to be invalidated.
+ * @granule_size: Page/block size of the mapping in bytes. It is used to
+ *                compute the invalidation range together with @nb_granules.
+ * @nb_granules: Number of contiguous granules to be invalidated.
+ *
+ * The Intel VT-d specific invalidation data for user-managed stage-1 cache
+ * invalidation under nested translation. Userspace uses this structure to
+ * tell host about the impacted caches after modifying the stage-1 page table.
+ *
+ * @addr, @granule_size and @nb_granules are meaningful when
+ * @granularity==IOMMU_VTD_QI_GRAN_ADDR. Intel VT-d currently only supports
+ * 4kB page size, so @granule_size should be 4KB. @addr should be aligned
+ * with @granule_size * @nb_granules, otherwise invalidation won't take
+ * effect.
+ */
+struct iommu_hwpt_invalidate_intel_vtd {
+	__u32 flags;
+	__u8 granularity;
+	__u8 padding[3];
+	__u64 addr;
+	__u64 granule_size;
+	__u64 nb_granules;
+};
+
+/**
  * struct iommu_hwpt_invalidate - ioctl(IOMMU_HWPT_INVALIDATE)
  * @size: sizeof(struct iommu_hwpt_invalidate)
  * @hwpt_id: HWPT ID of target hardware page table for the invalidation
@@ -526,6 +578,8 @@ struct iommu_hw_info {
  *
  * +==============================+========================================+
  * | @hwpt_type                   |     Data structure in @data_uptr       |
+ * +------------------------------+----------------------------------------+
+ * | IOMMU_HWPT_TYPE_VTD_S1       | struct iommu_hwpt_invalidate_intel_vtd |
  * +------------------------------+----------------------------------------+
  */
 struct iommu_hwpt_invalidate {

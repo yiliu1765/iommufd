@@ -19,7 +19,59 @@ static void intel_nested_domain_free(struct iommu_domain *domain)
 	kfree(to_dmar_domain(domain));
 }
 
+static void intel_nested_invalidate(struct device *dev,
+				    struct dmar_domain *domain,
+				    void *user_data)
+{
+	struct iommu_hwpt_invalidate_intel_vtd *inv_info = user_data;
+	struct device_domain_info *info = dev_iommu_priv_get(dev);
+	struct intel_iommu *iommu = info->iommu;
+
+	if (WARN_ON(!user_data))
+		return;
+
+	switch (inv_info->granularity) {
+	case IOMMU_VTD_QI_GRAN_ADDR:
+		if (inv_info->granule_size != VTD_PAGE_SIZE ||
+		    !IS_ALIGNED(inv_info->addr, VTD_PAGE_SIZE)) {
+			dev_err_ratelimited(dev, "Invalid invalidation address 0x%llx\n",
+					    inv_info->addr);
+			return;
+		}
+
+		iommu_flush_iotlb_psi(iommu, domain,
+				      inv_info->addr >> VTD_PAGE_SHIFT,
+				      inv_info->nb_granules, 1, 0);
+		break;
+	case IOMMU_VTD_QI_GRAN_DOMAIN:
+		intel_flush_iotlb_all(&domain->domain);
+		break;
+	default:
+		dev_err_ratelimited(dev, "Unsupported IOMMU invalidation type %d\n",
+				    inv_info->granularity);
+		break;
+	}
+}
+
+static int intel_nested_cache_invalidate_user(struct iommu_domain *domain,
+					      void *user_data)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct device_domain_info *info;
+	unsigned long flags;
+
+	spin_lock_irqsave(&dmar_domain->lock, flags);
+	list_for_each_entry(info, &dmar_domain->devices, link)
+		intel_nested_invalidate(info->dev, dmar_domain,
+					user_data);
+	spin_unlock_irqrestore(&dmar_domain->lock, flags);
+	return 0;
+}
+
 static const struct iommu_domain_ops intel_nested_domain_ops = {
+	.cache_invalidate_user	= intel_nested_cache_invalidate_user,
+	.cache_invalidate_user_data_len =
+		sizeof(struct iommu_hwpt_invalidate_intel_vtd),
 	.free			= intel_nested_domain_free,
 };
 
