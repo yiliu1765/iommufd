@@ -73,9 +73,121 @@ static void intel_nested_domain_free(struct iommu_domain *domain)
 	kfree(to_dmar_domain(domain));
 }
 
+static void nested_flush_pasid_iotlb(struct intel_iommu *iommu,
+				     struct dmar_domain *domain, u64 addr,
+				     unsigned long npages, bool ih)
+{
+	u16 did = domain_id_iommu(domain, iommu);
+	unsigned long flags;
+
+	spin_lock_irqsave(&domain->lock, flags);
+	if (!list_empty(&domain->devices))
+		qi_flush_piotlb(iommu, did, IOMMU_NO_PASID, addr,
+				npages, ih, NULL);
+	spin_unlock_irqrestore(&domain->lock, flags);
+}
+
+static void nested_flush_dev_iotlb(struct dmar_domain *domain, u64 addr,
+				  unsigned mask, u32 *fault)
+{
+	struct device_domain_info *info;
+	unsigned long flags;
+	u16 sid, qdep;
+
+	spin_lock_irqsave(&domain->lock, flags);
+	list_for_each_entry(info, &domain->devices, link) {
+		if (!info->ats_enabled)
+			continue;
+		sid = info->bus << 8 | info->devfn;
+		qdep = info->ats_qdep;
+		qi_flush_dev_iotlb(info->iommu, sid, info->pfsid,
+				   qdep, addr, mask, fault);
+		quirk_extra_dev_tlb_flush(info, addr, mask,
+					  IOMMU_NO_PASID, qdep);
+	}
+	spin_unlock_irqrestore(&domain->lock, flags);
+}
+
+static int intel_nested_flush_cache(struct dmar_domain *domain, u64 addr,
+				    unsigned long npages, u32 *fault)
+{
+	struct iommu_domain_info *info;
+	unsigned long i;
+	unsigned mask;
+
+	if (npages == U64_MAX)
+		mask = 64 - VTD_PAGE_SHIFT;
+	else
+		mask = ilog2(__roundup_pow_of_two(npages));
+
+	xa_for_each(&domain->iommu_array, i, info) {
+		nested_flush_pasid_iotlb(info->iommu, domain, addr, npages, 0);
+
+		if (domain->has_iotlb_device)
+			continue;
+
+		nested_flush_dev_iotlb(domain, addr, mask, fault);
+		if (fault)
+			return -EIO;
+	}
+
+	return 0;
+}
+
+static int intel_nested_cache_invalidate_user(struct iommu_domain *domain,
+					      struct iommu_user_data_array *array)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct iommu_hwpt_vtd_s1_invalidate inv_info;
+	u32 inv_error = 0, handled = 0;
+	void __user *entry_uptr;
+	u32 index;
+	int ret;
+
+	for (index = 0; index < array->entry_num; index++) {
+		ret = iommu_copy_struct_from_user_array(&inv_info, array,
+							IOMMU_HWPT_DATA_VTD_S1,
+							index, inv_error,
+							&entry_uptr);
+		if (ret)
+			break;
+
+		if (inv_info.flags & ~IOMMU_VTD_INV_FLAGS_LEAF) {
+			ret = -EOPNOTSUPP;
+			break;
+		}
+
+		if (!IS_ALIGNED(inv_info.addr, VTD_PAGE_SIZE) ||
+		    ((inv_info.npages == U64_MAX) && inv_info.addr)) {
+			ret = -EINVAL;
+			break;
+		}
+
+		ret = intel_nested_flush_cache(dmar_domain, inv_info.addr,
+					       inv_info.npages, &inv_error);
+
+		inv_info.inv_error = inv_error;
+		if (copy_to_user(entry_uptr, (void *)&inv_info,
+				 min_t(size_t, array->entry_len,
+				       sizeof(inv_info)))) {
+			ret = -EFAULT;
+			break;
+		}
+
+		handled++;
+
+		if (ret)
+			break;
+	}
+
+	array->entry_num = handled;
+	return ret;
+}
+
 static const struct iommu_domain_ops intel_nested_domain_ops = {
 	.attach_dev		= intel_nested_attach_dev,
 	.free			= intel_nested_domain_free,
+	.cache_invalidate_user	= intel_nested_cache_invalidate_user,
 };
 
 struct iommu_domain *intel_nested_domain_alloc(struct iommu_domain *parent,
