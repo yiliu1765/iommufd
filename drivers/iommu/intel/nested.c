@@ -68,9 +68,80 @@ static void intel_nested_domain_free(struct iommu_domain *domain)
 	kfree(to_dmar_domain(domain));
 }
 
+static void domain_flush_iotlb_psi(struct dmar_domain *domain,
+				   u64 addr, unsigned long npages)
+{
+	struct iommu_domain_info *info;
+	unsigned long i;
+
+	xa_for_each(&domain->iommu_array, i, info)
+		iommu_flush_iotlb_psi(info->iommu, domain,
+				      addr >> VTD_PAGE_SHIFT, npages, 1, 0);
+}
+
+static int intel_nested_cache_invalidate_user(struct iommu_domain *domain,
+					      const struct iommu_user_data *user_data)
+{
+	const size_t min_len =
+		offsetofend(struct iommu_hwpt_vtd_s1_invalidate, inv_data_uptr);
+	const size_t entry_min_size =
+		offsetofend(struct iommu_hwpt_vtd_s1_invalidate_desc, __reserved);
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct iommu_hwpt_vtd_s1_invalidate inv_info;
+	struct iommu_hwpt_vtd_s1_invalidate_desc req;
+	unsigned int entry_size;
+	u32 entry_nr, index;
+	u64 nr_uptr, uptr;
+	int ret;
+
+	ret = iommu_copy_user_data(&inv_info, user_data, sizeof(inv_info), min_len);
+	if (ret)
+		return ret;
+
+	if (inv_info.flags)
+		return -EINVAL;
+
+	entry_size = inv_info.entry_size;
+	nr_uptr = inv_info.entry_nr_uptr;
+	uptr = inv_info.inv_data_uptr;
+
+	if (get_user(entry_nr, (uint32_t __user *)u64_to_user_ptr(nr_uptr)))
+		return -EFAULT;
+
+	if (entry_size < entry_min_size)
+		return -EINVAL;
+
+	for (index = 0; index < entry_nr; index++) {
+		ret = copy_struct_from_user(&req, sizeof(req),
+					    u64_to_user_ptr(uptr + index * entry_size),
+					    entry_size);
+		if (ret) {
+			pr_err_ratelimited("Failed to fetch invalidation request\n");
+			break;
+		}
+
+		if (req.__reserved || (req.flags & ~IOMMU_VTD_QI_FLAGS_LEAF) ||
+		    !IS_ALIGNED(req.addr, VTD_PAGE_SIZE)) {
+			ret = -EINVAL;
+			break;
+		}
+
+		if (req.addr == 0 && req.npages == -1)
+			intel_flush_iotlb_all(domain);
+		else
+			domain_flush_iotlb_psi(dmar_domain, req.addr, req.npages);
+	}
+
+	if (put_user(index, (uint32_t __user *)u64_to_user_ptr(nr_uptr)))
+		return -EFAULT;
+
+	return ret;
+}
+
 static const struct iommu_domain_ops intel_nested_domain_ops = {
 	.attach_dev		= intel_nested_attach_dev,
 	.free			= intel_nested_domain_free,
+	.cache_invalidate_user	= intel_nested_cache_invalidate_user,
 };
 
 struct iommu_domain *intel_nested_domain_alloc(struct iommu_domain *s2_domain,
