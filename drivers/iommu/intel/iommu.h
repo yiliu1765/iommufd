@@ -627,6 +627,12 @@ struct dmar_domain {
 			unsigned long s1_pgtbl;
 			/* page table attributes */
 			struct iommu_hwpt_vtd_s1 s1_cfg;
+			/*
+			 * The minimum size of the user provided cache
+			 * invalidation descriptor.
+			 */
+			const size_t user_cache_inval_desc_min_size;
+
 		};
 	};
 
