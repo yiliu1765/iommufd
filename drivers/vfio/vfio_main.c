@@ -265,6 +265,18 @@ out_uninit:
 	return ret;
 }
 
+static int vfio_device_set_noiommu(struct vfio_device *device)
+{
+	struct iommu_group *iommu_group = iommu_group_get(device->dev);
+
+	if (!iommu_group && !vfio_noiommu)
+		return -EINVAL;
+
+	device->noiommu = !iommu_group;
+	iommu_group_put(iommu_group); /* Accepts NULL */
+	return 0;
+}
+
 static int __vfio_register_dev(struct vfio_device *device,
 			       enum vfio_group_type type)
 {
@@ -277,6 +289,13 @@ static int __vfio_register_dev(struct vfio_device *device,
 		     !device->ops->detach_ioas)))
 		return -EINVAL;
 
+	/* Only physical devices can be noiommu device */
+	if (type == VFIO_IOMMU) {
+		ret = vfio_device_set_noiommu(device);
+		if (ret)
+			return ret;
+	}
+
 	/*
 	 * If the driver doesn't specify a set then the device is added to a
 	 * singleton set just for itself.
@@ -288,7 +307,8 @@ static int __vfio_register_dev(struct vfio_device *device,
 	if (ret)
 		return ret;
 
-	ret = vfio_device_set_group(device, type);
+	ret = vfio_device_set_group(device,
+				    device->noiommu ? VFIO_NO_IOMMU : type);
 	if (ret)
 		return ret;
 
@@ -301,6 +321,15 @@ static int __vfio_register_dev(struct vfio_device *device,
 
 	vfio_device_group_register(device);
 
+	if (device->noiommu) {
+		/*
+		 * noiommu deivces have no IOMMU hardware/driver.  Taint the
+		 * kernel because we're about to give a DMA capable device to
+		 * a user without IOMMU protection.
+		 */
+		add_taint(TAINT_USER, LOCKDEP_STILL_OK);
+		dev_warn(device->dev, "Adding kernel taint for vfio-noiommu on device\n");
+	}
 	return 0;
 err_out:
 	vfio_device_remove_group(device);
