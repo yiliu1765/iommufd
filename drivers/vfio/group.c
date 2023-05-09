@@ -670,21 +670,6 @@ static struct vfio_group *vfio_group_find_or_alloc(struct device *dev)
 	struct vfio_group *group;
 
 	iommu_group = iommu_group_get(dev);
-	if (!iommu_group && vfio_noiommu) {
-		/*
-		 * With noiommu enabled, create an IOMMU group for devices that
-		 * don't already have one, implying no IOMMU hardware/driver
-		 * exists.  Taint the kernel because we're about to give a DMA
-		 * capable device to a user without IOMMU protection.
-		 */
-		group = vfio_noiommu_group_alloc(dev, VFIO_NO_IOMMU);
-		if (!IS_ERR(group)) {
-			add_taint(TAINT_USER, LOCKDEP_STILL_OK);
-			dev_warn(dev, "Adding kernel taint for vfio-noiommu group on device\n");
-		}
-		return group;
-	}
-
 	if (!iommu_group)
 		return ERR_PTR(-EINVAL);
 
@@ -719,6 +704,9 @@ int vfio_device_set_group(struct vfio_device *device,
 			  enum vfio_group_type type)
 {
 	struct vfio_group *group;
+
+	if (device->noiommu)
+		type = VFIO_NO_IOMMU;
 
 	if (type == VFIO_IOMMU)
 		group = vfio_group_find_or_alloc(device->dev);
