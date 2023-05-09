@@ -111,7 +111,7 @@ long vfio_device_ioctl_bind_iommufd(struct vfio_device_file *df,
 	if (df->group)
 		return -EINVAL;
 
-	if (vfio_device_is_noiommu(device) && !capable(CAP_SYS_RAWIO))
+	if (device->noiommu && !capable(CAP_SYS_RAWIO))
 		return -EPERM;
 
 	ret = vfio_device_block_group(device);
@@ -157,7 +157,7 @@ long vfio_device_ioctl_bind_iommufd(struct vfio_device_file *df,
 	device->cdev_opened = true;
 	mutex_unlock(&device->dev_set->lock);
 
-	if (vfio_device_is_noiommu(device))
+	if (device->noiommu)
 		dev_warn(device->dev, "noiommu device is bound to iommufd by user "
 			 "(%s:%d)\n", current->comm, task_pid_nr(current));
 	return 0;

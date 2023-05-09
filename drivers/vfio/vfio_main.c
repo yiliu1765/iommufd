@@ -289,8 +289,12 @@ static int __vfio_register_dev(struct vfio_device *device,
 	if (ret)
 		return ret;
 
+	ret = vfio_device_set_noiommu(device);
+	if (ret)
+		goto err_out;
+
 	ret = dev_set_name(&device->device, "%svfio%d",
-			   vfio_device_is_noiommu(device) ? "noiommu-" : "", device->index);
+			   device->noiommu ? "noiommu-" : "", device->index);
 	if (ret)
 		goto err_out;
 
