@@ -62,7 +62,7 @@ int vfio_df_iommufd_bind(struct vfio_device_file *df)
 
 	lockdep_assert_held(&vdev->dev_set->lock);
 
-	if (vfio_device_is_noiommu(vdev))
+	if (vdev->noiommu)
 		return vfio_iommufd_noiommu_bind(vdev, ictx, &df->devid);
 
 	return vdev->ops->bind_iommufd(vdev, ictx, &df->devid);
@@ -77,7 +77,7 @@ int vfio_iommufd_compat_attach_ioas(struct vfio_device *vdev,
 	lockdep_assert_held(&vdev->dev_set->lock);
 
 	/* compat noiommu does not need to do ioas attach */
-	if (vfio_device_is_noiommu(vdev))
+	if (vdev->noiommu)
 		return 0;
 
 	ret = iommufd_vfio_compat_ioas_get_id(ictx, &ioas_id);
@@ -94,7 +94,7 @@ void vfio_df_iommufd_unbind(struct vfio_device_file *df)
 
 	lockdep_assert_held(&vdev->dev_set->lock);
 
-	if (vfio_device_is_noiommu(vdev)) {
+	if (vdev->noiommu) {
 		vfio_iommufd_noiommu_unbind(vdev);
 		return;
 	}
@@ -107,7 +107,7 @@ int vfio_device_attach_pt(struct vfio_device *vdev, u32 *pt_id)
 {
 	lockdep_assert_held(&vdev->dev_set->lock);
 
-	if (vfio_device_is_noiommu(vdev))
+	if (vdev->noiommu)
 		return 0;
 
 	return vdev->ops->attach_ioas(vdev, pt_id);
@@ -117,7 +117,7 @@ void vfio_device_detach_pt(struct vfio_device *vdev)
 {
 	lockdep_assert_held(&vdev->dev_set->lock);
 
-	if (!vfio_device_is_noiommu(vdev))
+	if (!vdev->noiommu)
 		vdev->ops->detach_ioas(vdev);
 }
 
