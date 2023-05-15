@@ -10,61 +10,145 @@
 MODULE_IMPORT_NS(IOMMUFD);
 MODULE_IMPORT_NS(IOMMUFD_VFIO);
 
-int vfio_iommufd_bind(struct vfio_device *vdev, struct iommufd_ctx *ictx)
+static void vfio_noiommu_access_unmap(void *data, unsigned long iova,
+				      unsigned long length)
+{
+}
+
+static const struct iommufd_access_ops vfio_user_noiommu_ops = {
+	.needs_pin_pages = 1,
+	.unmap = vfio_noiommu_access_unmap,
+};
+
+static int vfio_iommufd_noiommu_bind(struct vfio_device *vdev,
+				     struct iommufd_ctx *ictx,
+				     u32 *out_device_id)
+{
+	struct iommufd_access *user;
+
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	user = iommufd_access_create(ictx, &vfio_user_noiommu_ops,
+				     vdev, out_device_id);
+	if (IS_ERR(user))
+		return PTR_ERR(user);
+	vdev->noiommu_access = user;
+	return 0;
+}
+
+static void vfio_iommufd_noiommu_unbind(struct vfio_device *vdev)
+{
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (vdev->noiommu_access) {
+		iommufd_access_destroy(vdev->noiommu_access);
+		vdev->noiommu_access = NULL;
+	}
+}
+
+int vfio_iommufd_compat_probe_noiommu(struct vfio_device *device,
+				      struct iommufd_ctx *ictx)
 {
 	u32 ioas_id;
-	u32 device_id;
+
+	if (!capable(CAP_SYS_RAWIO))
+		return -EPERM;
+
+	/*
+	 * Require no compat ioas to be assigned to proceed.  The basic
+	 * statement is that the user cannot have done something that
+	 * implies they expected translation to exist
+	 */
+	if (!iommufd_vfio_compat_ioas_get_id(ictx, &ioas_id))
+		return -EPERM;
+	return 0;
+}
+
+int vfio_iommufd_bind(struct vfio_device_file *df)
+{
+	struct vfio_device *vdev = df->device;
+	struct iommufd_ctx *ictx = df->iommufd;
+
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (vdev->noiommu)
+		return vfio_iommufd_noiommu_bind(vdev, ictx, &df->devid);
+
+	return vdev->ops->bind_iommufd(vdev, ictx, &df->devid);
+}
+
+int vfio_iommufd_compat_attach_ioas(struct vfio_device *vdev,
+				    struct iommufd_ctx *ictx)
+{
+	u32 ioas_id;
 	int ret;
 
 	lockdep_assert_held(&vdev->dev_set->lock);
 
-	if (vfio_device_is_noiommu(vdev)) {
-		if (!capable(CAP_SYS_RAWIO))
-			return -EPERM;
-
-		/*
-		 * Require no compat ioas to be assigned to proceed. The basic
-		 * statement is that the user cannot have done something that
-		 * implies they expected translation to exist
-		 */
-		if (!iommufd_vfio_compat_ioas_get_id(ictx, &ioas_id))
-			return -EPERM;
+	/* compat noiommu does not need to do ioas attach */
+	if (vdev->noiommu)
 		return 0;
-	}
-
-	ret = vdev->ops->bind_iommufd(vdev, ictx, &device_id);
-	if (ret)
-		return ret;
 
 	ret = iommufd_vfio_compat_ioas_get_id(ictx, &ioas_id);
 	if (ret)
-		goto err_unbind;
-	ret = vdev->ops->attach_ioas(vdev, &ioas_id);
-	if (ret)
-		goto err_unbind;
+		return ret;
 
-	/*
-	 * The legacy path has no way to return the device id or the selected
-	 * pt_id
-	 */
-	return 0;
-
-err_unbind:
-	if (vdev->ops->unbind_iommufd)
-		vdev->ops->unbind_iommufd(vdev);
-	return ret;
+	/* The legacy path has no way to return the selected pt_id */
+	return vdev->ops->attach_ioas(vdev, &ioas_id);
 }
 
-void vfio_iommufd_unbind(struct vfio_device *vdev)
+void vfio_iommufd_unbind(struct vfio_device_file *df)
+{
+	struct vfio_device *vdev = df->device;
+
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (vdev->noiommu) {
+		vfio_iommufd_noiommu_unbind(vdev);
+		return;
+	}
+
+	if (vdev->ops->unbind_iommufd)
+		vdev->ops->unbind_iommufd(vdev);
+}
+
+int vfio_iommufd_attach(struct vfio_device *vdev, u32 *pt_id)
 {
 	lockdep_assert_held(&vdev->dev_set->lock);
 
-	if (vfio_device_is_noiommu(vdev))
-		return;
+	if (vdev->noiommu)
+		return 0;
 
-	if (vdev->ops->unbind_iommufd)
-		vdev->ops->unbind_iommufd(vdev);
+	return vdev->ops->attach_ioas(vdev, pt_id);
 }
+
+void vfio_iommufd_detach(struct vfio_device *vdev)
+{
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (!vdev->noiommu)
+		vdev->ops->detach_ioas(vdev);
+}
+
+struct iommufd_ctx *vfio_iommufd_physical_ictx(struct vfio_device *vdev)
+{
+	if (vdev->iommufd_device)
+		return iommufd_device_to_ictx(vdev->iommufd_device);
+	if (vdev->noiommu_access)
+		return iommufd_access_to_ictx(vdev->noiommu_access);
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_physical_ictx);
+
+int vfio_iommufd_physical_devid(struct vfio_device *vdev)
+{
+	if (vdev->iommufd_device)
+		return iommufd_device_to_id(vdev->iommufd_device);
+	if (vdev->noiommu_access)
+		return iommufd_access_to_id(vdev->noiommu_access);
+	return -EINVAL;
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_physical_devid);
 
 /*
  * The physical standard ops mean that the iommufd_device is bound to the
@@ -101,6 +185,14 @@ int vfio_iommufd_physical_attach_ioas(struct vfio_device *vdev, u32 *pt_id)
 {
 	int rc;
 
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (WARN_ON(!vdev->iommufd_device))
+		return -EINVAL;
+
+	if (vdev->iommufd_attached)
+		return -EBUSY;
+
 	rc = iommufd_device_attach(vdev->iommufd_device, pt_id);
 	if (rc)
 		return rc;
@@ -108,6 +200,18 @@ int vfio_iommufd_physical_attach_ioas(struct vfio_device *vdev, u32 *pt_id)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(vfio_iommufd_physical_attach_ioas);
+
+void vfio_iommufd_physical_detach_ioas(struct vfio_device *vdev)
+{
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (WARN_ON(!vdev->iommufd_device) || !vdev->iommufd_attached)
+		return;
+
+	iommufd_device_detach(vdev->iommufd_device);
+	vdev->iommufd_attached = false;
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_physical_detach_ioas);
 
 /*
  * The emulated standard ops mean that vfio_device is going to use the
@@ -172,3 +276,15 @@ int vfio_iommufd_emulated_attach_ioas(struct vfio_device *vdev, u32 *pt_id)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(vfio_iommufd_emulated_attach_ioas);
+
+void vfio_iommufd_emulated_detach_ioas(struct vfio_device *vdev)
+{
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (WARN_ON(!vdev->iommufd_access) || !vdev->iommufd_attached)
+		return;
+
+	iommufd_access_detach(vdev->iommufd_access);
+	vdev->iommufd_attached = false;
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_emulated_detach_ioas);
