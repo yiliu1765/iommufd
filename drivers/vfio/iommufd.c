@@ -119,13 +119,26 @@ int vfio_iommufd_physical_bind(struct vfio_device *vdev,
 	if (IS_ERR(idev))
 		return PTR_ERR(idev);
 	vdev->iommufd_device = idev;
+	ida_init(&vdev->pasids);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(vfio_iommufd_physical_bind);
 
 void vfio_iommufd_physical_unbind(struct vfio_device *vdev)
 {
+	int pasid = 0;
+
 	lockdep_assert_held(&vdev->dev_set->lock);
+
+	while (!ida_is_empty(&vdev->pasids)) {
+		pasid = ida_get_lowest(&vdev->pasids, pasid, INT_MAX);
+		printk("%s pasid: %d\n", __func__, pasid);
+		if (pasid < 0)
+			break;
+
+		iommufd_device_pasid_detach(vdev->iommufd_device, pasid);
+		ida_free(&vdev->pasids, pasid);
+	}
 
 	if (vdev->iommufd_attached) {
 		iommufd_device_detach(vdev->iommufd_device);
@@ -167,6 +180,52 @@ void vfio_iommufd_physical_detach_ioas(struct vfio_device *vdev)
 	vdev->iommufd_attached = false;
 }
 EXPORT_SYMBOL_GPL(vfio_iommufd_physical_detach_ioas);
+
+int vfio_iommufd_physical_pasid_attach_ioas(struct vfio_device *vdev,
+					    u32 pasid, u32 *pt_id)
+{
+	int rc;
+
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (WARN_ON(!vdev->iommufd_device))
+		return -EINVAL;
+
+	rc = ida_get_lowest(&vdev->pasids, pasid, pasid);
+	if (rc == pasid)
+		return iommufd_device_pasid_replace(vdev->iommufd_device, pasid, pt_id);
+
+	rc = iommufd_device_pasid_attach(vdev->iommufd_device, pasid, pt_id);
+	if (rc)
+		return rc;
+
+	rc = ida_alloc_range(&vdev->pasids, pasid, pasid, GFP_KERNEL);
+	if (rc < 0) {
+		iommufd_device_pasid_detach(vdev->iommufd_device, pasid);
+		return rc;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_physical_pasid_attach_ioas);
+
+void vfio_iommufd_physical_pasid_detach_ioas(struct vfio_device *vdev, u32 pasid)
+{
+	int rc;
+
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (WARN_ON(!vdev->iommufd_device))
+		return;
+
+	rc = ida_get_lowest(&vdev->pasids, pasid, pasid);
+	if (rc < 0)
+		return;
+
+	iommufd_device_pasid_detach(vdev->iommufd_device, pasid);
+	ida_free(&vdev->pasids, pasid);
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_physical_pasid_detach_ioas);
 
 /*
  * The emulated standard ops mean that vfio_device is going to use the
