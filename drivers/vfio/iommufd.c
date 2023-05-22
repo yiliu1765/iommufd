@@ -130,6 +130,24 @@ void vfio_iommufd_detach(struct vfio_device *vdev)
 		vdev->ops->detach_ioas(vdev);
 }
 
+int vfio_iommufd_attach_pasid(struct vfio_device *vdev, u32 pasid, u32 pt_id)
+{
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (vdev->noiommu || !vdev->ops->attach_ioas_pasid)
+		return -EINVAL;
+
+	return vdev->ops->attach_ioas_pasid(vdev, pasid, pt_id);
+}
+
+void vfio_iommufd_detach_pasid(struct vfio_device *vdev, u32 pasid)
+{
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (!vdev->noiommu && vdev->ops->detach_ioas_pasid)
+		vdev->ops->detach_ioas_pasid(vdev, pasid);
+}
+
 struct iommufd_ctx *vfio_iommufd_physical_ictx(struct vfio_device *vdev)
 {
 	if (vdev->iommufd_device)
@@ -164,6 +182,7 @@ int vfio_iommufd_physical_bind(struct vfio_device *vdev,
 	if (IS_ERR(idev))
 		return PTR_ERR(idev);
 	vdev->iommufd_device = idev;
+	xa_init(&vdev->pasid_pts);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(vfio_iommufd_physical_bind);
@@ -171,6 +190,16 @@ EXPORT_SYMBOL_GPL(vfio_iommufd_physical_bind);
 void vfio_iommufd_physical_unbind(struct vfio_device *vdev)
 {
 	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (!xa_empty(&vdev->pasid_pts)) {
+		void *entry;
+		unsigned long index;
+
+		xa_for_each(&vdev->pasid_pts, index, entry) {
+			xa_erase(&vdev->pasid_pts, index);
+			iommufd_device_pasid_detach(vdev->iommufd_device, index);
+		}
+	}
 
 	if (vdev->iommufd_attached) {
 		iommufd_device_detach(vdev->iommufd_device);
@@ -212,6 +241,46 @@ void vfio_iommufd_physical_detach_ioas(struct vfio_device *vdev)
 	vdev->iommufd_attached = false;
 }
 EXPORT_SYMBOL_GPL(vfio_iommufd_physical_detach_ioas);
+
+int vfio_iommufd_physical_attach_ioas_pasid(struct vfio_device *vdev,
+					    u32 pasid, u32 pt_id)
+{
+	int rc;
+	void *entry;
+
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (WARN_ON(!vdev->iommufd_device))
+		return -EINVAL;
+
+	/* FIXME: add a check whether PASID is supported on this device */
+
+	entry = xa_load(&vdev->pasid_pts, pasid);
+	if (xa_is_value(entry))
+		rc = iommufd_device_pasid_replace(vdev->iommufd_device, pasid, pt_id);
+	else
+		rc = iommufd_device_pasid_attach(vdev->iommufd_device, pasid, pt_id);
+	if (rc)
+		return rc;
+	xa_store(&vdev->pasid_pts, pasid, xa_mk_value(pt_id), GFP_KERNEL);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_physical_attach_ioas_pasid);
+
+void vfio_iommufd_physical_detach_ioas_pasid(struct vfio_device *vdev, u32 pasid)
+{
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (WARN_ON(!vdev->iommufd_device) ||
+		    !xa_is_value(xa_load(&vdev->pasid_pts, pasid)))
+		return;
+
+	/* FIXME: add a check whether PASID is supported on this device */
+
+	iommufd_device_pasid_detach(vdev->iommufd_device, pasid);
+	xa_erase(&vdev->pasid_pts, pasid);
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_physical_detach_ioas_pasid);
 
 /*
  * The emulated standard ops mean that vfio_device is going to use the
