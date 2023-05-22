@@ -119,6 +119,7 @@ int vfio_iommufd_physical_bind(struct vfio_device *vdev,
 	if (IS_ERR(idev))
 		return PTR_ERR(idev);
 	vdev->iommufd_device = idev;
+	ida_init(&vdev->pasids);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(vfio_iommufd_physical_bind);
@@ -126,6 +127,34 @@ EXPORT_SYMBOL_GPL(vfio_iommufd_physical_bind);
 void vfio_iommufd_physical_unbind(struct vfio_device *vdev)
 {
 	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (!ida_is_empty(&vdev->pasids)) {
+		unsigned long index;
+		void *entry;
+
+		xa_for_each(&vdev->pasids.xa, index, entry) {
+			unsigned long size, pasid;
+			unsigned bit;
+			void *addr;
+
+			if (xa_is_value(entry)) {
+				unsigned long tmp = xa_to_value(entry);
+
+				addr = &tmp;
+				size = BITS_PER_XA_VALUE;
+			} else {
+				addr = ((struct ida_bitmap *)entry)->bitmap;
+				size = IDA_BITMAP_BITS;
+			}
+
+			for_each_set_bit(bit, addr, size) {
+				pasid = index * size + bit;
+				iommufd_device_pasid_detach(
+						vdev->iommufd_device, pasid);
+			}
+		}
+		ida_destroy(&vdev->pasids);
+	}
 
 	if (vdev->iommufd_attached) {
 		iommufd_device_detach(vdev->iommufd_device);
@@ -167,6 +196,53 @@ void vfio_iommufd_physical_detach_ioas(struct vfio_device *vdev)
 	vdev->iommufd_attached = false;
 }
 EXPORT_SYMBOL_GPL(vfio_iommufd_physical_detach_ioas);
+
+int vfio_iommufd_physical_pasid_attach_ioas(struct vfio_device *vdev,
+					    u32 pasid, u32 *pt_id)
+{
+	int rc;
+
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (WARN_ON(!vdev->iommufd_device))
+		return -EINVAL;
+
+	rc = ida_alloc_range(&vdev->pasids, pasid, pasid, GFP_KERNEL);
+	if (rc == -ENOSPC)
+		return iommufd_device_pasid_replace(vdev->iommufd_device, pasid, pt_id);
+
+	if (rc < 0)
+		return rc;
+
+	WARN_ON_ONCE(rc != pasid);
+
+	rc = iommufd_device_pasid_attach(vdev->iommufd_device, pasid, pt_id);
+	if (rc)
+		ida_free(&vdev->pasids, pasid);
+	return rc;
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_physical_pasid_attach_ioas);
+
+void vfio_iommufd_physical_pasid_detach_ioas(struct vfio_device *vdev, u32 pasid)
+{
+	int rc;
+
+	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (WARN_ON(!vdev->iommufd_device))
+		return;
+
+	rc = ida_alloc_range(&vdev->pasids, pasid, pasid, GFP_KERNEL);
+	if (rc != -ENOSPC) {
+		if (rc == pasid)
+			ida_free(&vdev->pasids, pasid);
+		return;
+	}
+
+	iommufd_device_pasid_detach(vdev->iommufd_device, pasid);
+	ida_free(&vdev->pasids, pasid);
+}
+EXPORT_SYMBOL_GPL(vfio_iommufd_physical_pasid_detach_ioas);
 
 /*
  * The emulated standard ops mean that vfio_device is going to use the
