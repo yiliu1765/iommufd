@@ -393,6 +393,7 @@ struct iommufd_device {
 	struct list_head group_item;
 	/* always the physical device */
 	struct device *dev;
+	struct xarray pasid_hwpts;
 	bool enforce_cache_coherency;
 };
 
@@ -412,8 +413,22 @@ struct attach_data {
 		struct iommufd_hw_pagetable *(*attach_fn)(
 				struct iommufd_device *idev,
 				struct iommufd_hw_pagetable *hwpt);
+		struct iommufd_hw_pagetable *(*pasid_attach_fn)(
+				struct iommufd_device *idev, u32 pasid,
+				struct iommufd_hw_pagetable *hwpt);
 	};
+	u32 pasid;
 };
+
+int iommufd_device_change_pt(struct iommufd_device *idev, u32 *pt_id,
+			     struct attach_data *data);
+
+struct iommufd_hw_pagetable *
+iommufd_device_pasid_do_attach(struct iommufd_device *idev, u32 pasid,
+			       struct iommufd_hw_pagetable *hwpt);
+struct iommufd_hw_pagetable *
+iommufd_device_pasid_do_replace(struct iommufd_device *idev, u32 pasid,
+				struct iommufd_hw_pagetable *hwpt);
 
 struct iommufd_access {
 	struct iommufd_object obj;
