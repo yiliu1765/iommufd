@@ -136,6 +136,7 @@ void iommufd_device_destroy(struct iommufd_object *obj)
 	struct iommufd_device *idev =
 		container_of(obj, struct iommufd_device, obj);
 
+	WARN_ON(!xa_empty(&idev->pasid_hwpts));
 	iommu_device_release_dma_owner(idev->dev);
 	iommufd_put_group(idev->igroup);
 	if (!iommufd_selftest_is_mock_dev(idev->dev))
@@ -215,6 +216,8 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 	refcount_inc(&idev->obj.users);
 	/* igroup refcount moves into iommufd_device */
 	idev->igroup = igroup;
+
+	xa_init(&idev->pasid_hwpts);
 
 	/*
 	 * If the caller fails after this success it must call
@@ -534,7 +537,17 @@ err_unlock:
 static struct iommufd_hw_pagetable *do_attach(struct iommufd_device *idev,
 		struct iommufd_hw_pagetable *hwpt, struct attach_data *data)
 {
-	return data->attach_fn(idev, hwpt);
+	if (data->pasid == IOMMU_PASID_INVALID) {
+		BUG_ON((data->attach_fn != iommufd_device_do_attach) &&
+		       (data->attach_fn != iommufd_device_do_replace));
+		return data->attach_fn(idev, hwpt);
+	} else {
+		BUG_ON((data->pasid_attach_fn !=
+			iommufd_device_pasid_do_attach) &&
+		       (data->pasid_attach_fn !=
+			iommufd_device_pasid_do_replace));
+		return data->pasid_attach_fn(idev, data->pasid, hwpt);
+	}
 }
 
 /*
@@ -684,6 +697,7 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
 	int rc;
 	struct attach_data data = {
 		.attach_fn = &iommufd_device_do_attach,
+		.pasid = IOMMU_PASID_INVALID,
 	};
 
 	rc = iommufd_device_change_pt(idev, pt_id, &data);
@@ -718,6 +732,7 @@ int iommufd_device_replace(struct iommufd_device *idev, u32 *pt_id)
 {
 	struct attach_data data = {
 		.attach_fn = &iommufd_device_do_replace,
+		.pasid = IOMMU_PASID_INVALID,
 	};
 
 	return iommufd_device_change_pt(idev, pt_id, &data);
