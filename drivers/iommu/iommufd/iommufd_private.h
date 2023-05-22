@@ -310,6 +310,9 @@ struct iommufd_device {
 	struct list_head group_item;
 	/* always the physical device */
 	struct device *dev;
+	struct xarray pasid_hwpts;
+#define IOMMUFD_PASID_ALLOC_USER	1 /* All PASIDs claimed by the user */
+	u32 pasid_flags;
 	bool enforce_cache_coherency;
 	bool has_user_data;
 };
