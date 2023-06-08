@@ -615,6 +615,93 @@ struct iommu_hwpt_get_dirty_bitmap {
 					IOMMUFD_CMD_HWPT_GET_DIRTY_BITMAP)
 
 /**
+ * enum iommu_hwpt_vtd_s1_invalidate_flags - Flags for Intel VT-d
+ *                                           stage-1 cache invalidation
+ * @IOMMU_VTD_INV_FLAGS_LEAF: The LEAF flag indicates whether only the
+ *                            leaf PTE caching needs to be invalidated
+ *                            and other paging structure caches can be
+ *                            preserved.
+ */
+enum iommu_hwpt_vtd_s1_invalidate_flags {
+	IOMMU_VTD_INV_FLAGS_LEAF = 1 << 0,
+};
+
+/**
+ * enum iommu_hwpt_vtd_s1_invalidate_result_code - Result of invalidation
+ * @IOMMU_HWPT_VTD_S1_INVALIDATE_SUCC: Success
+ * @IOMMU_HWPT_VTD_S1_INVALIDATE_DEVTLB_ICE: Invalidation Completion Error, details
+ *                                           refer to 11.4.7.1 Fault Status Register
+ *                                           of VT-d specification.
+ * @IOMMU_HWPT_VTD_S1_INVALIDATE_DEVTLB_ITE: Invalidation Time-out Error, details
+ *                                           refer to 11.4.7.1 Fault Status Register
+ *                                           of VT-d specification.
+ */
+enum iommu_hwpt_vtd_s1_invalidate_result_code {
+	IOMMU_HWPT_VTD_S1_INVALIDATE_SUCC,
+	IOMMU_HWPT_VTD_S1_INVALIDATE_INVALID_REQ,
+	IOMMU_HWPT_VTD_S1_INVALIDATE_DEVTLB_ICE,
+	IOMMU_HWPT_VTD_S1_INVALIDATE_DEVTLB_ITE,
+};
+
+/**
+ * union ommu_hwpt_invalidate_selftest_error_data
+ *
+ * @dev_id: The device in the invalidation completion message, additional data
+ *          for IOMMU_HWPT_VTD_S1_INVALIDATE_DEVTLB_ICE and
+ *          IOMMU_HWPT_VTD_S1_INVALIDATE_DEVTLB_ITE errors.
+ */
+union iommu_hwpt_vtd_s1_invalidate_error_data {
+	__u32 dev_id;
+};
+
+
+/**
+ * struct iommu_hwpt_vtd_s1_invalidate - Intel VT-d cache invalidation
+ *                                       (IOMMU_HWPT_DATA_VTD_S1)
+ * @addr: The start address of the addresses to be invalidated. It needs
+ *        to be 4KB aligned.
+ * @npages: Number of contiguous 4K pages to be invalidated.
+ * @flags: Combination of enum iommu_hwpt_vtd_s1_invalidate_flags
+ * @__reserved: Must be 0.
+ * @code: One of enum iommu_hwpt_vtd_s1_invalidate_result_code
+ * @err_data_len: Input the length of the buffer @error_data_uptr points.
+ *                Output the length of the error data kernel has.
+ * @error_data_uptr: User pointer to a user-space buffer used by the kernel
+ *                   to fill the error data if the error code has additional
+ *                   error data. Otherwise, zeroed by kernel.
+ *
+ * The Intel VT-d specific invalidation data for user-managed stage-1 cache
+ * invalidation in nested translation. Userspace uses this structure to
+ * tell the impacted cache scope after modifying the stage-1 page table.
+ *
+ * Invalidating all the caches related to the page table by setting @addr
+ * to be 0 and @npages to be U64_MAX.
+ *
+ * @code, @err_data_len and the content pointed by @err_data_uptr is
+ * meaningful only if the request is handled successfully. This can be known
+ * by checking struct iommu_hwpt_invalidate::req_num output. @code only
+ * covers the error detected by hardware after submitting the invalidation.
+ * Software detected errors would fail ioctl IOMMU_HWPT_INVALIDATE, and
+ * reporting error through normal ioctl errno.
+ *
+ * @err_data_len and @error_data_uptr should be given if user wants to get
+ * error data. Trailing bytes will be zeroed if the user buffer is larger than
+ * the data that kernel has. Otherwise, kernel only fills the buffer using the
+ * given length in @err_data_len. If the invalidation entry has error data
+ * reported, @err_data_len will be updated to the length that kernel actually
+ * has.
+ */
+struct iommu_hwpt_vtd_s1_invalidate {
+	__aligned_u64 addr;
+	__aligned_u64 npages;
+	__u32 flags;
+	__u32 __reserved;
+	__u32 code;
+	__u32 err_data_len;
+	__aligned_u64 err_data_uptr;
+};
+
+/**
  * struct iommu_hwpt_invalidate - ioctl(IOMMU_HWPT_INVALIDATE)
  * @size: sizeof(struct iommu_hwpt_invalidate)
  * @hwpt_id: HWPT ID of a nested HWPT for cache invalidation
