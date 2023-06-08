@@ -252,6 +252,8 @@ union iommu_cache_invalidate_user_data {
 #ifdef CONFIG_IOMMUFD_TEST
 	__u64 test;
 #endif
+	struct iommu_hwpt_vtd_s1_invalidate vtd;
+	struct iommu_hwpt_vtd_s1_invalidate_desc req_vtd;
 };
 
 /**
