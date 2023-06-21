@@ -27,7 +27,8 @@ void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
 
 	if (hwpt->parent)
 		refcount_dec(&hwpt->parent->obj.users);
-	refcount_dec(&hwpt->ioas->obj.users);
+	else
+		refcount_dec(&hwpt->ioas->obj.users);
 }
 
 void iommufd_hw_pagetable_abort(struct iommufd_object *obj)
@@ -36,7 +37,8 @@ void iommufd_hw_pagetable_abort(struct iommufd_object *obj)
 		container_of(obj, struct iommufd_hw_pagetable, obj);
 
 	/* The ioas->mutex must be held until finalize is called. */
-	lockdep_assert_held(&hwpt->ioas->mutex);
+	if (hwpt->ioas)
+		lockdep_assert_held(&hwpt->ioas->mutex);
 
 	if (!list_empty(&hwpt->hwpt_item)) {
 		list_del_init(&hwpt->hwpt_item);
@@ -108,8 +110,11 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 	struct iommufd_hw_pagetable *hwpt;
 	int rc;
 
-	lockdep_assert_held(&ioas->mutex);
+	if (ioas)
+		lockdep_assert_held(&ioas->mutex);
 
+	if (!!parent == !!ioas)
+		return ERR_PTR(-EINVAL);
 	if (parent && !user_data)
 		return ERR_PTR(-EINVAL);
 	if (user_data && !ops->domain_alloc_user)
@@ -121,7 +126,8 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 
 	INIT_LIST_HEAD(&hwpt->hwpt_item);
 	/* Pairs with iommufd_hw_pagetable_destroy() */
-	refcount_inc(&ioas->obj.users);
+	if (ioas)
+		refcount_inc(&ioas->obj.users);
 	hwpt->ioas = ioas;
 	if (parent) {
 		hwpt->parent = parent;
@@ -199,7 +205,7 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	struct iommu_hwpt_alloc *cmd = ucmd->cmd;
 	struct iommufd_object *pt_obj;
 	struct iommufd_device *idev;
-	struct iommufd_ioas *ioas;
+	struct iommufd_ioas *ioas = NULL;
 	int rc = 0;
 
 	if (cmd->flags || cmd->__reserved)
@@ -238,7 +244,6 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 			rc = -EINVAL;
 			goto out_put_pt;
 		}
-		ioas = parent->ioas;
 		break;
 	default:
 		rc = -EINVAL;
@@ -259,7 +264,8 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 			goto out_free_data;
 	}
 
-	mutex_lock(&ioas->mutex);
+	if (ioas)
+		mutex_lock(&ioas->mutex);
 	hwpt = iommufd_hw_pagetable_alloc(ucmd->ictx, ioas, idev,
 					  cmd->hwpt_type,
 					  parent, data, false);
@@ -278,7 +284,8 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 out_hwpt:
 	iommufd_object_abort_and_destroy(ucmd->ictx, &hwpt->obj);
 out_unlock:
-	mutex_unlock(&ioas->mutex);
+	if (ioas)
+		mutex_unlock(&ioas->mutex);
 out_free_data:
 	kfree(data);
 out_put_pt:
