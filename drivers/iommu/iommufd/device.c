@@ -334,23 +334,35 @@ static int iommufd_group_setup_msi(struct iommufd_group *igroup,
 static void iommufd_device_remove_rr(struct iommufd_device *idev,
 				     struct iommufd_hw_pagetable *hwpt)
 {
+	struct iommufd_ioas *ioas;
+
 	if (WARN_ON(!hwpt))
 		return;
 	if (hwpt->user_managed)
-		return;
-	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev);
+		ioas = hwpt->parent->ioas;
+	else
+		ioas = hwpt->ioas;
+	iopt_remove_reserved_iova(&ioas->iopt, idev->dev);
 }
 
 static int iommufd_device_enforce_rr(struct iommufd_device *idev,
 				     struct iommufd_hw_pagetable *hwpt,
 				     phys_addr_t *sw_msi_start)
 {
+	struct iommufd_ioas *ioas;
+	bool sw_msi_only;
+
 	if (WARN_ON(!hwpt))
 		return -EINVAL;
-	if (hwpt->user_managed)
-		return 0;
-	return iopt_table_enforce_dev_resv_regions(&hwpt->ioas->iopt, idev->dev,
-						   sw_msi_start);
+	if (hwpt->user_managed) {
+		ioas = hwpt->parent->ioas;
+		sw_msi_only = true;
+	} else {
+		ioas = hwpt->ioas;
+		sw_msi_only = false;
+	}
+	return iopt_table_enforce_dev_resv_regions(&ioas->iopt, idev->dev,
+						   sw_msi_start, sw_msi_only);
 }
 
 int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
