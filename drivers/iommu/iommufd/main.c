@@ -60,7 +60,7 @@ struct iommufd_object *_iommufd_object_alloc(struct iommufd_ctx *ictx,
 	 * before calling iommufd_object_finalize().
 	 */
 	rc = xa_alloc(&ictx->objects, &obj->id, XA_ZERO_ENTRY,
-		      xa_limit_32b, GFP_KERNEL_ACCOUNT);
+		      xa_limit_31b, GFP_KERNEL_ACCOUNT);
 	if (rc)
 		goto out_free;
 	return obj;
@@ -394,6 +394,29 @@ struct iommufd_ctx *iommufd_ctx_from_file(struct file *file)
 	return ictx;
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_ctx_from_file, IOMMUFD);
+
+/**
+ * iommufd_ctx_from_fd - Acquires a reference to the iommufd context
+ * @fd: File descriptor to obtain the reference from
+ *
+ * Returns a pointer to the iommufd_ctx, otherwise ERR_PTR. On success
+ * the caller is responsible to call iommufd_ctx_put().
+ */
+struct iommufd_ctx *iommufd_ctx_from_fd(int fd)
+{
+	struct iommufd_ctx *iommufd;
+	struct fd f;
+
+	f = fdget(fd);
+	if (!f.file)
+		return ERR_PTR(-EBADF);
+
+	iommufd = iommufd_ctx_from_file(f.file);
+
+	fdput(f);
+	return iommufd;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_ctx_from_fd, IOMMUFD);
 
 /**
  * iommufd_ctx_put - Put back a reference
