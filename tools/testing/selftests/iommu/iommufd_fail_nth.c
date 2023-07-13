@@ -623,6 +623,13 @@ TEST_FAIL_NTH(basic_fail_nth, device)
 
 	if (_test_cmd_mock_domain_replace(self->fd, stdev_id, hwpt_id, NULL))
 		return -1;
+
+	if (_test_cmd_pasid_attach(self->fd, stdev_id, 200, ioas_id))
+		return -1;
+
+	if (_test_cmd_pasid_replace(self->fd, stdev_id, 200, ioas_id2))
+		return -1;
+
 	return 0;
 }
 
