@@ -200,10 +200,29 @@ static int mock_domain_nop_attach(struct iommu_domain *domain,
 	return 0;
 }
 
+static bool pasid_1024_attached;
+
 static int mock_domain_set_dev_pasid_nop(struct iommu_domain *domain,
 					 struct device *dev, ioasid_t pasid,
 					 struct iommu_domain *old)
 {
+	/*
+	 * First attach with pasid 1024 succ, second attach would fail.
+	 * This is helpful to test the case in which the iommu core needs
+	 * to rollback to old domain due to driver failure.
+	 */
+	if (pasid == 1024) {
+		if (domain->type == IOMMU_DOMAIN_BLOCKED) {
+			pasid_1024_attached = false;
+		} else if (pasid_1024_attached) {
+			pasid_1024_attached = false;
+			// Fake an error to fail the replacement
+			return -ENOMEM;
+		} else {
+			pasid_1024_attached = true;
+		}
+	}
+
 	return 0;
 }
 
@@ -1697,9 +1716,61 @@ out_revert:
 	return ret;
 }
 
+static int iommufd_test_mixed_pasid_replace(struct iommu_domain *domain,
+					    struct iommufd_device *idev,
+					    ioasid_t pasid)
+{
+	struct iommu_group *group = idev->igroup->group;
+	struct iommu_attach_handle *handle;
+	struct device *dev = idev->dev;
+	int ret;
+
+	handle = kzalloc(sizeof(*handle), GFP_KERNEL);
+	if (!handle)
+		return -ENOMEM;
+
+	mutex_lock(&idev->igroup->lock);
+	/* should fail as no previous attached handle or domain */
+	ret = iommu_replace_device_pasid_handle(domain, dev, pasid, handle);
+	if (ret != -EINVAL)
+		goto out_unlock;
+
+	ret = iommu_attach_device_pasid(domain, dev, pasid);
+	if (ret)
+		goto out_unlock;
+
+	if (PTR_ERR(iommu_attach_handle_get(group, pasid, 0)) != -ENOENT) {
+		ret = -ENODEV;
+		goto out_detach;
+	}
+
+	ret = iommu_replace_device_pasid_handle(domain, dev, pasid, handle);
+	if (ret)
+		goto out_detach;
+
+	if (handle != iommu_attach_handle_get(group, pasid, 0)) {
+		ret = -ENOENT;
+		goto out_detach;
+	}
+
+	ret = iommu_replace_device_pasid_handle(domain, dev, pasid, handle);
+	if (ret)
+		goto out_detach;
+
+	if (handle != iommu_attach_handle_get(group, pasid, 0))
+		ret = -ENOENT;
+
+out_detach:
+	iommu_detach_device_pasid(domain, dev, pasid);
+out_unlock:
+	mutex_unlock(&idev->igroup->lock);
+	kfree(handle);
+	return ret;
+}
+
 static int iommufd_test_mixed_handle_replace(struct iommufd_ucmd *ucmd,
 					     unsigned int device_id,
-					     u32 pt_id)
+					     ioasid_t pasid, u32 pt_id)
 {
 	struct iommufd_hw_pagetable *hwpt;
 	struct iommufd_device *idev;
@@ -1722,12 +1793,125 @@ static int iommufd_test_mixed_handle_replace(struct iommufd_ucmd *ucmd,
 	domain = hwpt->domain;
 
 	rc = iommufd_test_mixed_group_replace(idev, domain);
+	if (rc)
+		goto out_put_hwpt;
 
+	if (pasid != IOMMU_NO_PASID)
+		rc = iommufd_test_mixed_pasid_replace(domain, idev, pasid);
+
+out_put_hwpt:
 	iommufd_put_object(ucmd->ictx, &hwpt->obj);
+out_dev_obj:
+	iommufd_put_object(ucmd->ictx, &sobj->obj);
+	return rc;
+}
+
+static int iommufd_test_pasid_check_domain(struct iommufd_ucmd *ucmd,
+					   struct iommu_test_cmd *cmd)
+{
+	struct iommu_domain *attached_domain, *expect_domain = NULL;
+	struct iommufd_hw_pagetable *hwpt = NULL;
+	struct iommu_attach_handle *handle;
+	struct selftest_obj *sobj;
+	struct mock_dev *mdev;
+	bool result;
+	int rc = 0;
+
+	sobj = iommufd_test_get_self_test_device(ucmd->ictx, cmd->id);
+	if (IS_ERR(sobj))
+		return PTR_ERR(sobj);
+
+	mdev = sobj->idev.mock_dev;
+
+	handle = iommu_attach_handle_get(mdev->dev.iommu_group,
+					 cmd->pasid_check.pasid, 0);
+	if (IS_ERR(handle))
+		attached_domain = NULL;
+	else
+		attached_domain = handle->domain;
+
+	if (cmd->pasid_check.hwpt_id) {
+		hwpt = iommufd_get_hwpt(ucmd, cmd->pasid_check.hwpt_id);
+		if (IS_ERR(hwpt)) {
+			rc = PTR_ERR(hwpt);
+			goto out_put_dev;
+		}
+		expect_domain = hwpt->domain;
+	}
+
+	result = (attached_domain == expect_domain) ? 1 : 0;
+	if (copy_to_user(u64_to_user_ptr(cmd->pasid_check.out_result_ptr),
+			 &result, sizeof(result)))
+		rc = -EFAULT;
+	if (hwpt)
+		iommufd_put_object(ucmd->ictx, &hwpt->obj);
+out_put_dev:
+	iommufd_put_object(ucmd->ictx, &sobj->obj);
+	return rc;
+}
+
+static int iommufd_test_pasid_attach(struct iommufd_ucmd *ucmd,
+				     struct iommu_test_cmd *cmd)
+{
+	struct selftest_obj *sobj;
+	int rc;
+
+	sobj = iommufd_test_get_self_test_device(ucmd->ictx, cmd->id);
+	if (IS_ERR(sobj))
+		return PTR_ERR(sobj);
+
+	rc = iommufd_device_pasid_attach(sobj->idev.idev,
+					 cmd->pasid_attach.pasid,
+					 &cmd->pasid_attach.pt_id);
+	if (rc)
+		goto out_dev_obj;
+
+	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+	if (rc)
+		iommufd_device_pasid_detach(sobj->idev.idev,
+					    cmd->pasid_attach.pasid);
 
 out_dev_obj:
 	iommufd_put_object(ucmd->ictx, &sobj->obj);
 	return rc;
+}
+
+static int iommufd_test_pasid_replace(struct iommufd_ucmd *ucmd,
+				      struct iommu_test_cmd *cmd)
+{
+	struct selftest_obj *sobj;
+	int rc;
+
+	sobj = iommufd_test_get_self_test_device(ucmd->ictx, cmd->id);
+	if (IS_ERR(sobj))
+		return PTR_ERR(sobj);
+
+	rc = iommufd_device_pasid_replace(sobj->idev.idev,
+					  cmd->pasid_attach.pasid,
+					  &cmd->pasid_attach.pt_id);
+	if (rc)
+		goto out_dev_obj;
+
+	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
+
+out_dev_obj:
+	iommufd_put_object(ucmd->ictx, &sobj->obj);
+	return rc;
+}
+
+static int iommufd_test_pasid_detach(struct iommufd_ucmd *ucmd,
+				     struct iommu_test_cmd *cmd)
+{
+	struct selftest_obj *sobj;
+
+	sobj = iommufd_test_get_self_test_device(ucmd->ictx, cmd->id);
+	if (IS_ERR(sobj))
+		return PTR_ERR(sobj);
+
+	iommufd_device_pasid_detach(sobj->idev.idev,
+				    cmd->pasid_detach.pasid);
+	iommufd_put_object(ucmd->ictx, &sobj->obj);
+	return 0;
 }
 
 void iommufd_selftest_destroy(struct iommufd_object *obj)
@@ -1812,8 +1996,22 @@ int iommufd_test(struct iommufd_ucmd *ucmd)
 	case IOMMU_TEST_OP_TRIGGER_IOPF:
 		return iommufd_test_trigger_iopf(ucmd, cmd);
 	case IOMMU_TEST_OP_MIX_REPLACE_HANDLE:
-		return iommufd_test_mixed_handle_replace(ucmd, cmd->id,
-						cmd->mix_replace_handle.pt_id);
+		return iommufd_test_mixed_handle_replace(
+			ucmd, cmd->id, IOMMU_NO_PASID,
+			cmd->mix_replace_handle.pt_id);
+	case IOMMU_TEST_OP_PASID_ATTACH:
+		return iommufd_test_pasid_attach(ucmd, cmd);
+	case IOMMU_TEST_OP_PASID_REPLACE:
+		return iommufd_test_pasid_replace(ucmd, cmd);
+	case IOMMU_TEST_OP_PASID_MIX_REPLACE_HANDLE:
+		return iommufd_test_mixed_handle_replace(
+			ucmd, cmd->id,
+			cmd->pasid_mix_replace_handle.pasid,
+			cmd->pasid_mix_replace_handle.pt_id);
+	case IOMMU_TEST_OP_PASID_DETACH:
+		return iommufd_test_pasid_detach(ucmd, cmd);
+	case IOMMU_TEST_OP_PASID_CHECK_DOMAIN:
+		return iommufd_test_pasid_check_domain(ucmd, cmd);
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -1861,6 +2059,7 @@ int __init iommufd_test_init(void)
 
 	mock_iommu_iopf_queue = iopf_queue_alloc("mock-iopfq");
 	mock_iommu.iommu_dev.max_pasids = (1 << 20);
+	pasid_1024_attached = false;
 
 	return 0;
 
