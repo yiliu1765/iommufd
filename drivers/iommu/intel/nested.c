@@ -48,7 +48,7 @@ static int intel_nested_attach_dev(struct iommu_domain *domain,
 	}
 
 	ret = intel_pasid_setup_nested(iommu, dev,
-				       PASID_RID2PASID, dmar_domain);
+				       IOMMU_NO_PASID, dmar_domain);
 	if (ret) {
 		domain_detach_iommu(dmar_domain, iommu);
 		dev_err_ratelimited(dev, "Failed to setup pasid entry\n");
