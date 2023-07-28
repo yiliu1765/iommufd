@@ -298,6 +298,11 @@ static int domain_type_is_si(struct dmar_domain *domain)
 	return domain->domain.type == IOMMU_DOMAIN_IDENTITY;
 }
 
+static int domain_type_is_nested(struct dmar_domain *domain)
+{
+	return domain->domain.type == IOMMU_DOMAIN_NESTED;
+}
+
 static int domain_pfn_supported(struct dmar_domain *domain, unsigned long pfn)
 {
 	int addr_width = agaw_to_width(domain->agaw) - VTD_PAGE_SHIFT;
@@ -4455,6 +4460,8 @@ static int __intel_iommu_set_dev_pasid(struct intel_iommu *iommu,
 
 	if (domain_type_is_si(dmar_domain))
 		ret = intel_pasid_setup_pass_through(iommu, dev, pasid);
+	else if (domain_type_is_nested(dmar_domain))
+		ret = intel_pasid_setup_nested(iommu, dev, pasid, dmar_domain);
 	else if (dmar_domain->use_first_level)
 		ret = domain_setup_first_level(iommu, dmar_domain,
 					       dev, pasid);
@@ -4492,11 +4499,12 @@ static void intel_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid,
 				       to_dmar_domain(domain));
 }
 
-static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
-				     struct device *dev, ioasid_t pasid,
-				     struct iommu_domain *old)
+int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
+			      struct device *dev, ioasid_t pasid,
+			      struct iommu_domain *old)
 {
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
 	struct intel_iommu *iommu = info->iommu;
 	int ret;
 
@@ -4509,7 +4517,12 @@ static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
 	if (context_copied(iommu, info->bus, info->devfn))
 		return -EBUSY;
 
-	ret = prepare_domain_attach_device(domain, dev);
+	/* Nested type domain should prepare its parent domain */
+	if (domain_type_is_nested(dmar_domain))
+		ret = prepare_domain_attach_device(
+				&dmar_domain->s2_domain->domain, dev);
+	else
+		ret = prepare_domain_attach_device(domain, dev);
 	if (ret)
 		return ret;
 
@@ -4518,8 +4531,7 @@ static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
 		__intel_iommu_remove_dev_pasid(iommu, dev, pasid,
 					       to_dmar_domain(old));
 
-	ret = __intel_iommu_set_dev_pasid(iommu, dev, pasid,
-					  to_dmar_domain(domain));
+	ret = __intel_iommu_set_dev_pasid(iommu, dev, pasid, dmar_domain);
 	if (ret && old)
 		/* Rollback to the prior old domain, it should succeed */
 		WARN_ON(__intel_iommu_set_dev_pasid(iommu, dev, pasid,
