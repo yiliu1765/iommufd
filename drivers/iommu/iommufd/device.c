@@ -329,6 +329,83 @@ static int iommufd_group_setup_msi(struct iommufd_group *igroup,
 	return 0;
 }
 
+static bool iommufd_must_remove_rr(struct iommufd_hw_pagetable *old_hwpt,
+				   struct iommufd_hw_pagetable *new_hwpt)
+{
+	struct iommufd_ioas *new_ioas;
+
+	if (!new_hwpt)
+		new_ioas = NULL;
+	else
+		new_ioas = new_hwpt->ioas;
+
+	/* When switching IOAS, cleaning up the old IOAS is a must */
+	if (old_hwpt->ioas != new_ioas)
+		return true;
+	return false;
+}
+
+/*
+ * Remove device's reserved regions from the reserved list of an iopt
+ * @idev: Device to remove its owned reserved regions
+ * @hwpt: Detaching hw_pagetable
+ * @new_hwpt: Optionally new hw_pagetable to replace with
+ *
+ * Call this function when an idev detaches or replaces an attached hwpt
+ */
+static void iommufd_device_remove_rr(struct iommufd_device *idev,
+				     struct iommufd_hw_pagetable *hwpt,
+				     struct iommufd_hw_pagetable *new_hwpt)
+{
+	if (WARN_ON(!hwpt))
+		return;
+	if (hwpt->user_managed)
+		return;
+	if (!iommufd_must_remove_rr(hwpt, new_hwpt))
+		return;
+	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev);
+}
+
+static bool iommufd_must_enforce_rr(struct iommufd_hw_pagetable *old_hwpt,
+				    struct iommufd_hw_pagetable *new_hwpt)
+{
+	struct iommufd_ioas *old_ioas;
+
+	if (!old_hwpt)
+		old_ioas = NULL;
+	else
+		old_ioas = old_hwpt->ioas;
+
+	/* When switching IOAS, enforcing the new IOAS is a must */
+	if (old_ioas != new_hwpt->ioas)
+		return true;
+	return false;
+}
+
+/*
+ * Enforce device's reserved regions onto the reserved list of an iopt
+ * @idev: Device to enforce its reserved regions
+ * @new_hwpt: Attaching hw_pagetable
+ * @sw_msi_start: Output the start address of IOMMU_RESV_SW_MSI
+ *
+ * Call this function when an idev attaches to or replaces with an hwpt
+ */
+static int iommufd_device_enforce_rr(struct iommufd_device *idev,
+				     struct iommufd_hw_pagetable *hwpt,
+				     phys_addr_t *sw_msi_start)
+{
+	struct iommufd_hw_pagetable *old_hwpt = idev->igroup->hwpt;
+
+	if (WARN_ON(!hwpt))
+		return -EINVAL;
+	if (hwpt->user_managed)
+		return -EINVAL;
+	if (!iommufd_must_enforce_rr(old_hwpt, hwpt))
+		return 0;
+	return iopt_table_enforce_dev_resv_regions(&hwpt->ioas->iopt, idev->dev,
+						   sw_msi_start);
+}
+
 int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
 				struct iommufd_device *idev)
 {
@@ -348,8 +425,7 @@ int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
 			goto err_unlock;
 	}
 
-	rc = iopt_table_enforce_dev_resv_regions(&hwpt->ioas->iopt, idev->dev,
-						 &idev->igroup->sw_msi_start);
+	rc = iommufd_device_enforce_rr(idev, hwpt, &idev->igroup->sw_msi_start);
 	if (rc)
 		goto err_unlock;
 
@@ -375,7 +451,7 @@ int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
 	mutex_unlock(&idev->igroup->lock);
 	return 0;
 err_unresv:
-	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev);
+	iommufd_device_remove_rr(idev, hwpt, NULL);
 err_unlock:
 	mutex_unlock(&idev->igroup->lock);
 	return rc;
@@ -392,7 +468,7 @@ iommufd_hw_pagetable_detach(struct iommufd_device *idev)
 		iommu_detach_group(hwpt->domain, idev->igroup->group);
 		idev->igroup->hwpt = NULL;
 	}
-	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev);
+	iommufd_device_remove_rr(idev, hwpt, NULL);
 	mutex_unlock(&idev->igroup->lock);
 
 	/* Caller must destroy hwpt */
@@ -441,16 +517,10 @@ iommufd_device_do_replace(struct iommufd_device *idev,
 			if (rc)
 				goto err_unlock;
 		}
-	}
 
-	old_hwpt = igroup->hwpt;
-	if (hwpt->ioas != old_hwpt->ioas) {
-		list_for_each_entry(cur, &igroup->device_list, group_item) {
-			rc = iopt_table_enforce_dev_resv_regions(
-				&hwpt->ioas->iopt, cur->dev, NULL);
-			if (rc)
-				goto err_unresv;
-		}
+		rc = iommufd_device_enforce_rr(cur, hwpt, NULL);
+		if (rc)
+			goto err_unresv;
 	}
 
 	rc = iommufd_group_setup_msi(idev->igroup, hwpt);
@@ -461,12 +531,10 @@ iommufd_device_do_replace(struct iommufd_device *idev,
 	if (rc)
 		goto err_unresv;
 
-	if (hwpt->ioas != old_hwpt->ioas) {
-		list_for_each_entry(cur, &igroup->device_list, group_item)
-			iopt_remove_reserved_iova(&old_hwpt->ioas->iopt,
-						  cur->dev);
-	}
+	list_for_each_entry(cur, &igroup->device_list, group_item)
+		iommufd_device_remove_rr(cur, igroup->hwpt, hwpt);
 
+	old_hwpt = igroup->hwpt;
 	igroup->hwpt = hwpt;
 
 	/*
@@ -483,7 +551,7 @@ iommufd_device_do_replace(struct iommufd_device *idev,
 	return old_hwpt;
 err_unresv:
 	list_for_each_entry(cur, &igroup->device_list, group_item)
-		iopt_remove_reserved_iova(&hwpt->ioas->iopt, cur->dev);
+		iommufd_device_remove_rr(cur, hwpt, NULL);
 err_unlock:
 	mutex_unlock(&idev->igroup->lock);
 	return ERR_PTR(rc);
