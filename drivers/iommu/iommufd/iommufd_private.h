@@ -237,12 +237,18 @@ struct iommufd_hw_pagetable {
 	void (*abort)(struct iommufd_object *obj);
 	void (*destroy)(struct iommufd_object *obj);
 
+	bool user_managed : 1;
 	union {
+		struct { /* user-managed */
+			struct iommufd_hw_pagetable *parent;
+		};
 		struct { /* kernel-managed */
 			struct iommufd_ioas *ioas;
+			struct mutex mutex;
 			bool auto_domain : 1;
 			bool enforce_cache_coherency : 1;
 			bool msi_cookie : 1;
+			bool nest_parent : 1;
 			/* Head at iommufd_ioas::hwpt_list */
 			struct list_head hwpt_item;
 		};
