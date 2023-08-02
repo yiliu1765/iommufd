@@ -237,12 +237,18 @@ struct iommufd_hw_pagetable {
 	void (*abort)(struct iommufd_object *obj);
 	void (*destroy)(struct iommufd_object *obj);
 
+	bool user_managed : 1;
 	union {
+		struct { /* user-managed */
+			struct iommufd_hw_pagetable *parent;
+		};
 		struct { /* kernel-managed */
 			struct iommufd_ioas *ioas;
+			struct mutex mutex;
 			bool auto_domain : 1;
 			bool enforce_cache_coherency : 1;
 			bool msi_cookie : 1;
+			bool nest_parent : 1;
 			/* Head at iommufd_ioas::hwpt_list */
 			struct list_head hwpt_item;
 		};
@@ -268,8 +274,10 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd);
 static inline void iommufd_hw_pagetable_put(struct iommufd_ctx *ictx,
 					    struct iommufd_hw_pagetable *hwpt)
 {
-	lockdep_assert_not_held(&hwpt->ioas->mutex);
-	if (hwpt->auto_domain)
+	if (!hwpt->user_managed)
+		lockdep_assert_not_held(&hwpt->ioas->mutex);
+
+	if (!hwpt->user_managed && hwpt->auto_domain)
 		iommufd_object_deref_user(ictx, &hwpt->obj);
 	else
 		refcount_dec(&hwpt->obj.users);
