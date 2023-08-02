@@ -3360,6 +3360,64 @@ void iommu_detach_device_pasid(struct iommu_domain *domain, struct device *dev,
 }
 EXPORT_SYMBOL_GPL(iommu_detach_device_pasid);
 
+/**
+ * iommu_replace_device_pasid - replace the domain that a pasid is attached to
+ * @domain: the new IOMMU domain to replace with
+ * @dev: the attached device.
+ * @pasid: the pasid of the device.
+ *
+ * This API allows the pasid to switch domains. Return valud:
+ *  - 0 : Success.
+ *  - -ENOMEM: Out of memory failure, pasid is parked in blocking DMA state or
+ *             still uses previous domain.
+ *  - Other negative integer: Failed to attach domain to pasid, pasid still
+ *             use the previous domain.
+ */
+int iommu_replace_device_pasid(struct iommu_domain *domain,
+			       struct device *dev, ioasid_t pasid)
+{
+	struct dev_iommu *param = dev->iommu;
+	struct iommu_domain *curr;
+	int ret;
+
+	if (!domain->ops->set_dev_pasid)
+		return -EOPNOTSUPP;
+
+	if (!param)
+		return -ENODEV;
+
+	mutex_lock(&param->lock);
+	curr = xa_store(&param->pasid_array, pasid, domain, GFP_KERNEL);
+	if (xa_err(curr)) {
+		ret = xa_err(curr);
+		goto err_unlock;
+	}
+
+	if (curr) {
+		const struct iommu_ops *ops = dev_iommu_ops(dev);
+		ops->remove_dev_pasid(dev, pasid);
+	}
+
+	ret = domain->ops->set_dev_pasid(domain, dev, pasid);
+	if (ret)
+		goto err_roll_back;
+	mutex_unlock(&param->lock);
+
+	return 0;
+err_roll_back:
+	if (curr) {
+		ret = xa_err(xa_store(&param->pasid_array, pasid,
+				      curr, GFP_KERNEL));
+		if (ret)
+			goto err_unlock;
+		WARN_ON_ONCE(domain->ops->set_dev_pasid(curr, dev, pasid));
+	}
+err_unlock:
+	mutex_unlock(&param->lock);
+	return ret;
+}
+EXPORT_SYMBOL_NS_GPL(iommu_replace_device_pasid, IOMMUFD_INTERNAL);
+
 /*
  * iommu_get_domain_for_dev_pasid() - Retrieve domain for @pasid of @dev
  * @dev: the queried device
