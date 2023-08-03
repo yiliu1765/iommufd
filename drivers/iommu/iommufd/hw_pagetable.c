@@ -69,7 +69,7 @@ int iommufd_hw_pagetable_enforce_cc(struct iommufd_hw_pagetable *hwpt)
 /**
  * iommufd_hw_pagetable_alloc() - Get a kernel-managed iommu_domain for a device
  * @ictx: iommufd context
- * @ioas: IOAS to associate the domain with
+ * @pt_obj: An object to an IOAS to associate the domain with
  * @idev: Device to get an iommu_domain for
  * @flags: Flags from userspace
  * @hwpt_type: Requested type of hw_pagetable
@@ -85,13 +85,16 @@ int iommufd_hw_pagetable_enforce_cc(struct iommufd_hw_pagetable *hwpt)
  * the returned hwpt.
  */
 struct iommufd_hw_pagetable *
-iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
+iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx,
+			   struct iommufd_object *pt_obj,
 			   struct iommufd_device *idev,
 			   u32 flags,
 			   enum iommu_hwpt_type hwpt_type,
 			   struct iommu_user_data *user_data,
 			   bool immediate_attach)
 {
+	struct iommufd_ioas *ioas =
+		container_of(pt_obj, struct iommufd_ioas, obj);
 	const struct iommu_ops *ops = dev_iommu_ops(idev->dev);
 	struct iommufd_hw_pagetable *hwpt;
 	int rc;
@@ -185,10 +188,19 @@ out_abort:
 
 int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 {
+	struct iommufd_hw_pagetable *(*alloc_fn)(
+					struct iommufd_ctx *ictx,
+					struct iommufd_object *pt_obj,
+					struct iommufd_device *idev,
+					u32 flags, enum iommu_hwpt_type type,
+					struct iommu_user_data *user_data,
+					bool flag);
 	struct iommu_hwpt_alloc *cmd = ucmd->cmd;
 	struct iommufd_hw_pagetable *hwpt;
+	struct iommufd_object *pt_obj;
 	struct iommufd_device *idev;
 	struct iommufd_ioas *ioas;
+	struct mutex *mutex;
 	int rc;
 
 	if (cmd->flags & ~IOMMU_HWPT_ALLOC_NEST_PARENT || cmd->__reserved)
@@ -198,17 +210,26 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	if (IS_ERR(idev))
 		return PTR_ERR(idev);
 
-	ioas = iommufd_get_ioas(ucmd->ictx, cmd->pt_id);
-	if (IS_ERR(ioas)) {
-		rc = PTR_ERR(ioas);
+	pt_obj = iommufd_get_object(ucmd->ictx, cmd->pt_id, IOMMUFD_OBJ_ANY);
+	if (IS_ERR(pt_obj)) {
+		rc = -EINVAL;
 		goto out_put_idev;
 	}
 
-	mutex_lock(&ioas->mutex);
-	hwpt = iommufd_hw_pagetable_alloc(ucmd->ictx, ioas,
-					  idev, cmd->flags,
-					  IOMMU_HWPT_TYPE_DEFAULT,
-					  NULL, false);
+	switch (pt_obj->type) {
+	case IOMMUFD_OBJ_IOAS:
+		ioas = container_of(pt_obj, struct iommufd_ioas, obj);
+		mutex = &ioas->mutex;
+		alloc_fn = iommufd_hw_pagetable_alloc;
+		break;
+	default:
+		rc = -EINVAL;
+		goto out_put_pt;
+	}
+
+	mutex_lock(mutex);
+	hwpt = alloc_fn(ucmd->ictx, pt_obj, idev, cmd->flags,
+			IOMMU_HWPT_TYPE_DEFAULT, NULL, false);
 	if (IS_ERR(hwpt)) {
 		rc = PTR_ERR(hwpt);
 		goto out_unlock;
@@ -224,8 +245,9 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 out_hwpt:
 	iommufd_object_abort_and_destroy(ucmd->ictx, &hwpt->obj);
 out_unlock:
-	mutex_unlock(&ioas->mutex);
-	iommufd_put_object(&ioas->obj);
+	mutex_unlock(mutex);
+out_put_pt:
+	iommufd_put_object(pt_obj);
 out_put_idev:
 	iommufd_put_object(&idev->obj);
 	return rc;
