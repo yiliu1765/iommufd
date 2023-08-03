@@ -590,7 +590,7 @@ int iopt_set_allow_iova(struct io_pagetable *iopt,
 }
 
 int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
-		      unsigned long last, void *owner)
+		      unsigned long last, void *owner, bool sw_msi)
 {
 	struct iopt_reserved *reserved;
 
@@ -605,12 +605,14 @@ int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
 		return -ENOMEM;
 	reserved->node.start = start;
 	reserved->node.last = last;
+	reserved->sw_msi = sw_msi;
 	reserved->owner = owner;
 	interval_tree_insert(&reserved->node, &iopt->reserved_itree);
 	return 0;
 }
 
-static void __iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner)
+static void __iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner,
+					bool keep_sw_msi)
 {
 	struct iopt_reserved *reserved, *next;
 
@@ -620,18 +622,20 @@ static void __iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner)
 	     reserved = next) {
 		next = iopt_reserved_iter_next(reserved, 0, ULONG_MAX);
 
-		if (reserved->owner == owner) {
-			interval_tree_remove(&reserved->node,
-					     &iopt->reserved_itree);
-			kfree(reserved);
-		}
+		if (reserved->owner != owner)
+			continue;
+		if (reserved->sw_msi && keep_sw_msi)
+			continue;
+		interval_tree_remove(&reserved->node, &iopt->reserved_itree);
+		kfree(reserved);
 	}
 }
 
-void iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner)
+void iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner,
+			       bool keep_sw_msi)
 {
 	down_write(&iopt->iova_rwsem);
-	__iopt_remove_reserved_iova(iopt, owner);
+	__iopt_remove_reserved_iova(iopt, owner, keep_sw_msi);
 	up_write(&iopt->iova_rwsem);
 }
 
@@ -658,7 +662,7 @@ void iopt_destroy_table(struct io_pagetable *iopt)
 	struct interval_tree_node *node;
 
 	if (IS_ENABLED(CONFIG_IOMMUFD_TEST))
-		iopt_remove_reserved_iova(iopt, NULL);
+		iopt_remove_reserved_iova(iopt, NULL, false);
 
 	while ((node = interval_tree_iter_first(&iopt->allowed_itree, 0,
 						ULONG_MAX))) {
@@ -868,13 +872,13 @@ int iopt_table_add_domain(struct io_pagetable *iopt,
 	/* No area exists that is outside the allowed domain aperture */
 	if (geometry->aperture_start != 0) {
 		rc = iopt_reserve_iova(iopt, 0, geometry->aperture_start - 1,
-				       domain);
+				       domain, false);
 		if (rc)
 			goto out_reserved;
 	}
 	if (geometry->aperture_end != ULONG_MAX) {
 		rc = iopt_reserve_iova(iopt, geometry->aperture_end + 1,
-				       ULONG_MAX, domain);
+				       ULONG_MAX, domain, false);
 		if (rc)
 			goto out_reserved;
 	}
@@ -896,7 +900,7 @@ int iopt_table_add_domain(struct io_pagetable *iopt,
 out_release:
 	xa_release(&iopt->domains, iopt->next_domain_id);
 out_reserved:
-	__iopt_remove_reserved_iova(iopt, domain);
+	__iopt_remove_reserved_iova(iopt, domain, false);
 out_unlock:
 	up_write(&iopt->iova_rwsem);
 	up_write(&iopt->domains_rwsem);
@@ -964,7 +968,7 @@ void iopt_table_remove_domain(struct io_pagetable *iopt,
 		xa_store(&iopt->domains, index, iter_domain, GFP_KERNEL);
 
 	iopt_unfill_domain(iopt, domain);
-	__iopt_remove_reserved_iova(iopt, domain);
+	__iopt_remove_reserved_iova(iopt, domain, false);
 
 	WARN_ON(iopt_calculate_iova_alignment(iopt));
 out_unlock:
@@ -1202,7 +1206,8 @@ int iopt_table_enforce_dev_resv_regions(struct io_pagetable *iopt,
 		if (sw_msi_only && resv->type != IOMMU_RESV_SW_MSI)
 			continue;
 		rc = iopt_reserve_iova(iopt, resv->start,
-				       resv->length - 1 + resv->start, dev);
+				       resv->length - 1 + resv->start, dev,
+				       resv->type == IOMMU_RESV_SW_MSI);
 		if (rc)
 			goto out_reserved;
 	}
@@ -1217,7 +1222,7 @@ int iopt_table_enforce_dev_resv_regions(struct io_pagetable *iopt,
 	goto out_free_resv;
 
 out_reserved:
-	__iopt_remove_reserved_iova(iopt, dev);
+	__iopt_remove_reserved_iova(iopt, dev, false);
 out_free_resv:
 	iommu_put_resv_regions(dev, &resv_regions);
 	up_write(&iopt->iova_rwsem);
