@@ -519,7 +519,7 @@ static int iommufd_test_add_reserved(struct iommufd_ucmd *ucmd,
 	if (IS_ERR(ioas))
 		return PTR_ERR(ioas);
 	down_write(&ioas->iopt.iova_rwsem);
-	rc = iopt_reserve_iova(&ioas->iopt, start, start + length - 1, NULL);
+	rc = iopt_reserve_iova(&ioas->iopt, start, start + length - 1, NULL, false);
 	up_write(&ioas->iopt.iova_rwsem);
 	iommufd_put_object(&ioas->obj);
 	return rc;
