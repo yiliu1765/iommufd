@@ -84,8 +84,9 @@ int iopt_table_enforce_dev_resv_regions(struct io_pagetable *iopt,
 int iopt_set_allow_iova(struct io_pagetable *iopt,
 			struct rb_root_cached *allowed_iova);
 int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
-		      unsigned long last, void *owner);
-void iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner);
+		      unsigned long last, void *owner, bool sw_msi);
+void iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner,
+			       bool keep_sw_msi);
 int iopt_cut_iova(struct io_pagetable *iopt, unsigned long *iovas,
 		  size_t num_iovas);
 void iopt_enable_large_pages(struct io_pagetable *iopt);
