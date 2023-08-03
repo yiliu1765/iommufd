@@ -330,18 +330,51 @@ static int iommufd_group_setup_msi(struct iommufd_group *igroup,
 }
 
 static bool iommufd_must_remove_rr(struct iommufd_hw_pagetable *old_hwpt,
-				   struct iommufd_hw_pagetable *new_hwpt)
+				   struct iommufd_hw_pagetable *new_hwpt,
+				   bool *keep_sw_msi)
 {
-	struct iommufd_ioas *new_ioas;
+	struct iommufd_ioas *old_ioas, *new_ioas;
+
+	if (!old_hwpt)
+		return false;
+	else if (old_hwpt->user_managed)
+		old_ioas = old_hwpt->parent->ioas;
+	else
+		old_ioas = old_hwpt->ioas;
 
 	if (!new_hwpt)
 		new_ioas = NULL;
+	else if (new_hwpt->user_managed)
+		new_ioas = new_hwpt->parent->ioas;
 	else
 		new_ioas = new_hwpt->ioas;
 
 	/* When switching IOAS, cleaning up the old IOAS is a must */
-	if (old_hwpt->ioas != new_ioas)
+	if (old_ioas != new_ioas) {
+		*keep_sw_msi = false;
 		return true;
+	}
+
+	/*
+	 * Must keep IOMMU_RESV_SW_MSI when switching from a kernel-managed
+	 * hw_pagetable to its associated user-managed hw_pagetable.
+	 */
+	if (!old_hwpt->user_managed && new_hwpt->user_managed) {
+		*keep_sw_msi = true;
+		return true;
+	}
+	/*
+	 * Do not remove in the remaining cases when IOAS isn't changed:
+	 * - switching from a kernel-managed hw_pagetable to another kernel-
+	 *   managed hw_pagetable associated to the same IOAS. All the existing
+	 *   reserved regions remain in the IOAS in this case.
+	 * - switching from a user-managed hw_pagetable to an associated kernel-
+	 *   managed hw_pagetable. In this case, all reserved regions must have
+	 *   been enforced in the IOAS, i.e. no removal after the enforcement.
+	 * - switching from a user-managed hw_pagetable to another user-managed
+	 *   hw_pagetable associated to the same parent hw_pagetable (or IOAS).
+	 *   In this case, the existing IOMMU_RESV_SW_MSI regions must be kept.
+	 */
 	return false;
 }
 
@@ -357,28 +390,66 @@ static void iommufd_device_remove_rr(struct iommufd_device *idev,
 				     struct iommufd_hw_pagetable *hwpt,
 				     struct iommufd_hw_pagetable *new_hwpt)
 {
+	struct iommufd_ioas *ioas;
+	bool keep_sw_msi;
+
 	if (WARN_ON(!hwpt))
 		return;
+	if (!iommufd_must_remove_rr(hwpt, new_hwpt, &keep_sw_msi))
+		return;
 	if (hwpt->user_managed)
-		return;
-	if (!iommufd_must_remove_rr(hwpt, new_hwpt))
-		return;
-	iopt_remove_reserved_iova(&hwpt->ioas->iopt, idev->dev, false);
+		ioas = hwpt->parent->ioas;
+	else
+		ioas = hwpt->ioas;
+	iopt_remove_reserved_iova(&ioas->iopt, idev->dev, keep_sw_msi);
 }
 
 static bool iommufd_must_enforce_rr(struct iommufd_hw_pagetable *old_hwpt,
-				    struct iommufd_hw_pagetable *new_hwpt)
+				    struct iommufd_hw_pagetable *new_hwpt,
+				    bool *sw_msi_only)
 {
-	struct iommufd_ioas *old_ioas;
+	struct iommufd_ioas *old_ioas, *new_ioas;
+
+	if (!new_hwpt)
+		return false;
+	else if (new_hwpt->user_managed)
+		new_ioas = new_hwpt->parent->ioas;
+	else
+		new_ioas = new_hwpt->ioas;
 
 	if (!old_hwpt)
 		old_ioas = NULL;
+	else if (old_hwpt->user_managed)
+		old_ioas = old_hwpt->parent->ioas;
 	else
 		old_ioas = old_hwpt->ioas;
 
+	if (new_hwpt->user_managed)
+		*sw_msi_only = true;
+	else
+		*sw_msi_only = false;
+
 	/* When switching IOAS, enforcing the new IOAS is a must */
-	if (old_ioas != new_hwpt->ioas)
+	if (old_ioas != new_ioas)
 		return true;
+	/*
+	 * Do not forget to enforce all regions when switching from a user-
+	 * managed hw_pagetable to its parent kernel-managed hw_pagetable.
+	 */
+	if (old_hwpt->user_managed && !new_hwpt->user_managed)
+		return true;
+	/*
+	 * Do not enforce in the remaining cases when IOAS isn't changed:
+	 * - switching from a kernel-managed hw_pagetable to another kernel-
+	 *   managed hw_pagetable associated to the same IOAS. All the existing
+	 *   reserved regions remain in the IOAS in this case.
+	 * - switching from a kernel-managed hw_pagetable to its associated
+	 *   user-managed hw_pagetable. In this case, all the reserved regions
+	 *   except IOMMU_RESV_SW_MSI will be removed from the reserved list.
+	 * - switching from a user-managed hw_pagetable to another user-managed
+	 *   hw_pagetable associated to the same parent hw_pagetable (or IOAS).
+	 *   In this case, IOMMU_RESV_SW_MSI is already enforced in the IOAS.
+	 */
 	return false;
 }
 
@@ -395,15 +466,19 @@ static int iommufd_device_enforce_rr(struct iommufd_device *idev,
 				     phys_addr_t *sw_msi_start)
 {
 	struct iommufd_hw_pagetable *old_hwpt = idev->igroup->hwpt;
+	struct iommufd_ioas *ioas;
+	bool sw_msi_only;
 
 	if (WARN_ON(!hwpt))
 		return -EINVAL;
-	if (hwpt->user_managed)
-		return -EINVAL;
-	if (!iommufd_must_enforce_rr(old_hwpt, hwpt))
+	if (!iommufd_must_enforce_rr(old_hwpt, hwpt, &sw_msi_only))
 		return 0;
-	return iopt_table_enforce_dev_resv_regions(&hwpt->ioas->iopt, idev->dev,
-						   sw_msi_start, false);
+	if (hwpt->user_managed)
+		ioas = hwpt->parent->ioas;
+	else
+		ioas = hwpt->ioas;
+	return iopt_table_enforce_dev_resv_regions(&ioas->iopt, idev->dev,
+						   sw_msi_start, sw_msi_only);
 }
 
 int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
