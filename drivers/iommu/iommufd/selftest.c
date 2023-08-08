@@ -369,9 +369,34 @@ static const struct iommu_ops mock_ops = {
 		},
 };
 
+static int mock_domain_cache_invalidate_user(struct iommu_domain *domain,
+			const union iommu_cache_invalidate_user_data *user_data)
+{
+	const struct iommu_hwpt_invalidate_selftest *inv_info =
+		(const struct iommu_hwpt_invalidate_selftest *)user_data;
+	struct mock_iommu_domain *mock =
+		container_of(domain, struct mock_iommu_domain, domain);
+
+	/* Check union iommu_cache_invalidate_user_data in include/linux/iommu.h */
+	static_assert(sizeof(struct iommu_hwpt_invalidate_selftest) <= 8);
+
+	if (domain->type != IOMMU_DOMAIN_NESTED || !mock->parent)
+		return -EINVAL;
+
+	if (inv_info->flags & IOMMU_TEST_INVALIDATE_ALL)
+		mock->iotlb = 0;
+
+	return 0;
+}
+
 static struct iommu_domain_ops domain_nested_ops = {
 	.free = mock_domain_free,
 	.attach_dev = mock_domain_nop_attach,
+	.cache_invalidate_user = mock_domain_cache_invalidate_user,
+	.cache_invalidate_user_data_len = {
+		.min = offsetofend(struct iommu_hwpt_invalidate_selftest, flags),
+		.max = sizeof(struct iommu_hwpt_invalidate_selftest),
+	},
 };
 
 static struct iommu_device mock_iommu_device = {
