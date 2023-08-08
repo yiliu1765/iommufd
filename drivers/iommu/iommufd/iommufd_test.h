@@ -148,4 +148,38 @@ struct iommu_hwpt_selftest {
 	__u32 iotlb;
 };
 
+/* Should not be equal to any defined value in enum iommu_hwpt_invalidate_data_type */
+#define IOMMU_HWPT_INVALIDATE_DATA_SELFTEST 0xdeadbeef
+#define IOMMU_HWPT_INVALIDATE_DATA_SELFTEST_INVALID 0xdadbeef
+
+/**
+ * enum iommu_hwpt_invalidate_selftest_result_code - Result of invalidation
+ * @IOMMU_TEST_INVALIDATE_SUCC: Success
+ * @IOMMU_TEST_INVALIDATE_FAKE_ERROR: Fake error per test program's request
+ */
+enum iommu_hwpt_invalidate_selftest_result_code {
+	IOMMU_TEST_INVALIDATE_SUCC,
+	IOMMU_TEST_INVALIDATE_FAKE_ERROR,
+};
+
+/**
+ * struct iommu_hwpt_invalidate_selftest
+ *
+ * @flags: Invalidate flags
+ * @iotlb_id: Invalidate iotlb entry index
+ * @code: One of enum iommu_hwpt_invalidate_selftest_result_code
+ * @__reserved: Must be 0
+ *
+ * If IOMMU_TEST_INVALIDATE_ALL is set in @flags, @iotlb_id will be ignored
+ * @code meaningful only if the request is processed successfully.
+ */
+struct iommu_hwpt_invalidate_selftest {
+#define IOMMU_TEST_INVALIDATE_FLAG_ALL	(1ULL << 0)
+#define IOMMU_TEST_INVALIDATE_FLAG_TRIGGER_ERROR	(1ULL << 1)
+	__u32 flags;
+	__u32 iotlb_id;
+	__u32 code;
+	__u32 __reserved;
+};
+
 #endif
