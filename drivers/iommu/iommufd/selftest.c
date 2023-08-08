@@ -473,9 +473,75 @@ static void mock_domain_free_nested(struct iommu_domain *domain)
 	kfree(mock_nested);
 }
 
+static int
+mock_domain_cache_invalidate_user(struct iommu_domain *domain,
+				  struct iommu_user_data_array *array)
+{
+	struct mock_iommu_domain_nested *mock_nested =
+		container_of(domain, struct mock_iommu_domain_nested, domain);
+	u32 error_code = IOMMU_TEST_INVALIDATE_SUCC, handled = 0;
+	struct iommu_hwpt_invalidate_selftest inv;
+	void __user *entry_uptr;
+	int rc = 0;
+	int i = 0, j;
+
+	for ( ;i < array->entry_num; i++) {
+		rc = iommu_copy_struct_from_user_array(&inv, array,
+						       IOMMU_HWPT_DATA_SELFTEST,
+						       i, __reserved, &entry_uptr);
+		if (rc)
+			break;
+
+		if ((inv.flags & ~(IOMMU_TEST_INVALIDATE_FLAG_ALL |
+				  IOMMU_TEST_INVALIDATE_FLAG_TRIGGER_ERROR)) ||
+		    inv.__reserved) {
+			rc = -EOPNOTSUPP;
+			break;
+		}
+
+		if ((inv.flags & IOMMU_TEST_INVALIDATE_FLAG_ALL) &&
+		    (inv.flags & IOMMU_TEST_INVALIDATE_FLAG_TRIGGER_ERROR)) {
+			rc = -EINVAL;
+			break;
+		}
+
+		if (inv.iotlb_id > MOCK_NESTED_DOMAIN_IOTLB_ID_MAX) {
+			rc = -EINVAL;
+			break;
+		}
+
+		if (inv.flags & IOMMU_TEST_INVALIDATE_FLAG_TRIGGER_ERROR) {
+			error_code = IOMMU_TEST_INVALIDATE_FAKE_ERROR;
+		} else if (inv.flags & IOMMU_TEST_INVALIDATE_FLAG_ALL) {
+			/* Invalidate all mock iotlb entries and ignore iotlb_id */
+			for (j = 0; j < MOCK_NESTED_DOMAIN_IOTLB_NUM; j++)
+				mock_nested->iotlb[j] = 0;
+		} else {
+			mock_nested->iotlb[inv.iotlb_id] = 0;
+		}
+
+		/* error code only cover mock iommu errors */
+		inv.code = error_code;
+		if (copy_to_user(entry_uptr, (void *)&inv,
+				 min_t(size_t, array->entry_len, sizeof(inv)))) {
+			rc = -EFAULT;
+			break;
+		}
+
+		handled++;
+
+		if (error_code)
+			break;
+	}
+
+	array->entry_num = handled;
+	return rc;
+}
+
 static struct iommu_domain_ops domain_nested_ops = {
 	.free = mock_domain_free_nested,
 	.attach_dev = mock_domain_nop_attach,
+	.cache_invalidate_user = mock_domain_cache_invalidate_user,
 };
 
 static inline struct iommufd_hw_pagetable *
