@@ -148,4 +148,60 @@ struct iommu_hwpt_selftest {
 	__u32 iotlb;
 };
 
+
+/**
+ * enum iommu_hwpt_invalidate_selftest_result_code - Result of invalidation
+ * @IOMMU_TEST_INVALIDATE_SUCC: Success
+ * @IOMMU_TEST_INVALIDATE_ERR_INVALID_REQ: Invalid request
+ * @IOMMU_TEST_INVALIDATE_ERR_NO_DATA: Error, no data
+ * @IOMMU_TEST_INVALIDATE_ERR_WITH_DATA: Error, extra data 0xdeadbeef
+ */
+enum iommu_hwpt_invalidate_selftest_result_code {
+	IOMMU_TEST_INVALIDATE_SUCC,
+	IOMMU_TEST_INVALIDATE_ERR_INVALID_REQ,
+	IOMMU_TEST_INVALIDATE_ERR_NO_DATA,
+	IOMMU_TEST_INVALIDATE_ERR_WITH_DATA,
+};
+
+/**
+ * union ommu_hwpt_invalidate_selftest_error_data
+ *
+ * @error: One of enum iommu_hwpt_invalidate_selftest_result_code
+ * @__reserved: Must be 0
+ * @data_uptr: Input user pointer to a user-space buffer used by the kernel
+ *             to fill extra error data. If no extra data, kernel zeros this
+ *             field.
+ */
+union iommu_hwpt_invalidate_selftest_error_data {
+	__u32 dead_beef;
+#define IOMMU_TEST_INVALIDATE_ERR_DATA	0xdeadbeef
+};
+
+/**
+ * struct iommu_hwpt_invalidate_selftest
+ *
+ * @flags: Invalidate flags
+ * @iotlb_id: Invalidate iotlb entry index
+ * @code: One of enum iommu_hwpt_invalidate_selftest_result_code
+ * @err_data_size: Input the size of the buffer @error_data_uptr points.
+ *                 Output the size of the error data for the error code.
+ * @error_data_uptr: User pointer to a user-space buffer used by the kernel
+ *                   to fill the error data of an error code if the error
+ *                   type has extra data. Otherwise, zeroed by kernel.
+ *
+ * If IOMMU_TEST_INVALIDATE_ALL is set in @flags, @iotlb_id will be ignored
+ * @code, @err_data_size and the content pointed by @err_data_uptr is
+ * meaningful only if the request is handled successfully.
+ */
+struct iommu_hwpt_invalidate_selftest {
+#define IOMMU_TEST_INVALIDATE_FLAG_ALL	(1ULL << 0)
+#define IOMMU_TEST_INVALIDATE_FLAG_ERR_WITHOUT_DATA	(1ULL << 1)
+#define IOMMU_TEST_INVALIDATE_FLAG_ERR_WITH_DATA	(1ULL << 2)
+	__u32 flags;
+	__u32 iotlb_id;
+	__u32 code;
+	__u32 err_data_size;
+	__aligned_u64 err_data_uptr;
+};
+
 #endif

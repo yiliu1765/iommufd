@@ -473,9 +473,86 @@ static void mock_domain_free_nested(struct iommu_domain *domain)
 	kfree(mock_nested);
 }
 
+static int
+mock_domain_cache_invalidate_user(struct iommu_domain *domain,
+				  struct iommu_user_data_array *array)
+{
+	struct mock_iommu_domain_nested *mock_nested =
+		container_of(domain, struct mock_iommu_domain_nested, domain);
+	union iommu_hwpt_invalidate_selftest_error_data err_data = {};
+	struct iommu_hwpt_invalidate_selftest inv;
+	void __user *entry_uptr, *err_uptr;
+	u32 error_code = 0, handled = 0;
+	unsigned long klen = 0;
+	int rc = 0;
+	int i = 0, j;
+
+	for ( ;i < array->entry_num; i++) {
+		rc = iommu_copy_struct_from_user_array(&inv, array,
+						       IOMMU_HWPT_DATA_SELFTEST,
+						       i, iotlb_id, &entry_uptr);
+		if (rc)
+			break;
+
+		if (inv.flags & ~(IOMMU_TEST_INVALIDATE_FLAG_ALL |
+				  IOMMU_TEST_INVALIDATE_FLAG_ERR_WITHOUT_DATA |
+				  IOMMU_TEST_INVALIDATE_FLAG_ERR_WITH_DATA) ||
+		    inv.iotlb_id > MOCK_NESTED_DOMAIN_IOTLB_ID_MAX ||
+		    !inv.err_data_uptr) {
+			error_code = IOMMU_TEST_INVALIDATE_ERR_INVALID_REQ;
+			goto err;
+		}
+
+		if (inv.flags & IOMMU_TEST_INVALIDATE_FLAG_ERR_WITHOUT_DATA) {
+			error_code = IOMMU_TEST_INVALIDATE_ERR_NO_DATA;
+			goto err;
+		}
+
+		if (inv.flags & IOMMU_TEST_INVALIDATE_FLAG_ERR_WITH_DATA) {
+			error_code = IOMMU_TEST_INVALIDATE_ERR_WITH_DATA;
+			err_data.dead_beef = IOMMU_TEST_INVALIDATE_ERR_DATA;
+			klen = sizeof(err_data.dead_beef);
+			goto err;
+		}
+
+		/* Invalidate all mock iotlb entries and ignore iotlb_id */
+		if (inv.flags & IOMMU_TEST_INVALIDATE_FLAG_ALL) {
+			for (j = 0; j < MOCK_NESTED_DOMAIN_IOTLB_NUM; j++)
+				mock_nested->iotlb[j] = 0;
+		} else {
+			mock_nested->iotlb[inv.iotlb_id] = 0;
+		}
+
+err:
+		err_uptr = u64_to_user_ptr(inv.err_data_uptr);
+
+		rc = iommu_copy_to_user(err_uptr, inv.err_data_size,
+					&err_data, klen);
+		if (rc)
+			break;
+
+		inv.code = error_code;
+		inv.err_data_size = klen;
+		if (copy_to_user(entry_uptr, (void *)&inv,
+				 min_t(size_t, array->entry_len, sizeof(inv)))) {
+			rc = -EFAULT;
+			break;
+		}
+
+		handled++;
+
+		if (error_code)
+			break;
+	}
+
+	array->entry_num = handled;
+	return rc;
+}
+
 static struct iommu_domain_ops domain_nested_ops = {
 	.free = mock_domain_free_nested,
 	.attach_dev = mock_domain_nop_attach,
+	.cache_invalidate_user = mock_domain_cache_invalidate_user,
 };
 
 static inline struct iommufd_hw_pagetable *
