@@ -349,9 +349,10 @@ iommufd_hwpt_paging_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 			  bool immediate_attach,
 			  const struct iommu_user_data *user_data);
 int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
-				struct iommufd_device *idev);
+				struct iommufd_device *idev,
+				ioasid_t pasid);
 struct iommufd_hw_pagetable *
-iommufd_hw_pagetable_detach(struct iommufd_device *idev);
+iommufd_hw_pagetable_detach(struct iommufd_device *idev, ioasid_t pasid);
 void iommufd_hwpt_paging_destroy(struct iommufd_object *obj);
 void iommufd_hwpt_paging_abort(struct iommufd_object *obj);
 void iommufd_hwpt_nested_destroy(struct iommufd_object *obj);
@@ -459,11 +460,12 @@ struct iommufd_attach_handle {
 #define to_iommufd_handle(hdl)	container_of(hdl, struct iommufd_attach_handle, handle)
 
 static inline struct iommufd_attach_handle *
-iommufd_device_get_attach_handle(struct iommufd_device *idev)
+iommufd_device_get_attach_handle(struct iommufd_device *idev, ioasid_t pasid)
 {
 	struct iommu_attach_handle *handle;
 
-	handle = iommu_attach_handle_get(idev->igroup->group, IOMMU_NO_PASID, 0);
+	WARN_ON(pasid != IOMMU_NO_PASID);
+	handle = iommu_attach_handle_get(idev->igroup->group, pasid, 0);
 	if (IS_ERR(handle))
 		return NULL;
 
@@ -471,7 +473,8 @@ iommufd_device_get_attach_handle(struct iommufd_device *idev)
 }
 
 static inline int iommufd_dev_attach_handle(struct iommufd_hw_pagetable *hwpt,
-					    struct iommufd_device *idev)
+					    struct iommufd_device *idev,
+					    ioasid_t pasid)
 {
 	struct iommufd_attach_handle *handle;
 	int ret;
@@ -481,6 +484,7 @@ static inline int iommufd_dev_attach_handle(struct iommufd_hw_pagetable *hwpt,
 		return -ENOMEM;
 
 	handle->idev = idev;
+	WARN_ON(pasid != IOMMU_NO_PASID);
 	ret = iommu_attach_group_handle(hwpt->domain, idev->igroup->group,
 					&handle->handle);
 	if (ret)
@@ -491,14 +495,14 @@ static inline int iommufd_dev_attach_handle(struct iommufd_hw_pagetable *hwpt,
 
 /* Caller to free the old iommufd_attach_handle */
 static inline struct iommufd_attach_handle *
-iommufd_dev_replace_handle(struct iommufd_device *idev,
+iommufd_dev_replace_handle(struct iommufd_device *idev, ioasid_t pasid,
 			   struct iommufd_hw_pagetable *hwpt,
 			   struct iommufd_hw_pagetable *old)
 {
 	struct iommufd_attach_handle *handle, *curr;
 	int ret;
 
-	curr = iommufd_device_get_attach_handle(idev);
+	curr = iommufd_device_get_attach_handle(idev, pasid);
 	if (!curr)
 		return ERR_PTR(-EINVAL);
 
@@ -507,6 +511,7 @@ iommufd_dev_replace_handle(struct iommufd_device *idev,
 		return ERR_PTR(-ENOMEM);
 
 	handle->idev = idev;
+	WARN_ON(pasid != IOMMU_NO_PASID);
 	ret = iommu_replace_group_handle(idev->igroup->group,
 					 hwpt->domain, &handle->handle);
 	if (ret) {
@@ -530,47 +535,55 @@ void iommufd_fault_destroy(struct iommufd_object *obj);
 int iommufd_fault_iopf_handler(struct iopf_group *group);
 
 int iommufd_fault_domain_attach_dev(struct iommufd_hw_pagetable *hwpt,
-				    struct iommufd_device *idev);
+				    struct iommufd_device *idev,
+				    ioasid_t pasid);
 void iommufd_fault_domain_detach_dev(struct iommufd_hw_pagetable *hwpt,
-				     struct iommufd_device *idev);
+				     struct iommufd_device *idev,
+				     ioasid_t pasid);
 int iommufd_fault_domain_replace_dev(struct iommufd_device *idev,
+				     ioasid_t pasid,
 				     struct iommufd_hw_pagetable *hwpt,
 				     struct iommufd_hw_pagetable *old);
 
 static inline int iommufd_hwpt_attach_device(struct iommufd_hw_pagetable *hwpt,
-					     struct iommufd_device *idev)
+					     struct iommufd_device *idev,
+					     ioasid_t pasid)
 {
 	if (hwpt->fault)
-		return iommufd_fault_domain_attach_dev(hwpt, idev);
+		return iommufd_fault_domain_attach_dev(hwpt, idev, pasid);
 
-	return iommufd_dev_attach_handle(hwpt, idev);
+	return iommufd_dev_attach_handle(hwpt, idev, pasid);
 }
 
 static inline void iommufd_hwpt_detach_device(struct iommufd_hw_pagetable *hwpt,
-					      struct iommufd_device *idev)
+					      struct iommufd_device *idev,
+					      ioasid_t pasid)
 {
 	struct iommufd_attach_handle *handle;
 
 	if (hwpt->fault) {
-		iommufd_fault_domain_detach_dev(hwpt, idev);
+		iommufd_fault_domain_detach_dev(hwpt, idev, pasid);
 		return;
 	}
 
-	handle = iommufd_device_get_attach_handle(idev);
+	handle = iommufd_device_get_attach_handle(idev, pasid);
+	WARN_ON(pasid != IOMMU_NO_PASID);
 	iommu_detach_group_handle(hwpt->domain, idev->igroup->group);
 	kfree(handle);
 }
 
 static inline int iommufd_hwpt_replace_device(struct iommufd_device *idev,
+					      ioasid_t pasid,
 					      struct iommufd_hw_pagetable *hwpt,
 					      struct iommufd_hw_pagetable *old)
 {
 	struct iommufd_attach_handle *curr;
 
 	if (old->fault || hwpt->fault)
-		return iommufd_fault_domain_replace_dev(idev, hwpt, old);
+		return iommufd_fault_domain_replace_dev(idev, pasid,
+							hwpt, old);
 
-	curr = iommufd_dev_replace_handle(idev, hwpt, old);
+	curr = iommufd_dev_replace_handle(idev, pasid, hwpt, old);
 	if (IS_ERR(curr))
 		return PTR_ERR(curr);
 
