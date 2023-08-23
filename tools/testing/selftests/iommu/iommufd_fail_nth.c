@@ -635,6 +635,18 @@ TEST_FAIL_NTH(basic_fail_nth, device)
 	if (_test_cmd_pasid_detach(self->fd, stdev_id, 200))
 		return -1;
 
+	/* Test for SIOV virtual devices attach */
+	if (_test_cmd_mock_domain(self->fd, ioas_id, 300, &stdev_id, NULL,
+				  &idev_id))
+		return -1;
+
+	/* Test for SIOV virtual device replace */
+	if (_test_cmd_mock_domain_replace(self->fd, stdev_id, hwpt_id, NULL))
+		return -1;
+
+	if (_test_ioctl_destroy(self->fd, stdev_id))
+		return -1;
+
 	return 0;
 }
 
