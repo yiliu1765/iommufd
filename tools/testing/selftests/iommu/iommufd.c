@@ -1982,20 +1982,31 @@ FIXTURE(iommufd_device_pasid)
 	uint32_t device_id;
 };
 
+FIXTURE_VARIANT(iommufd_device_pasid)
+{
+	uint32_t pasid;
+};
+
 FIXTURE_SETUP(iommufd_device_pasid)
 {
 	self->fd = open("/dev/iommu", O_RDWR);
 	ASSERT_NE(-1, self->fd);
 	test_ioctl_ioas_alloc(&self->ioas_id);
 
-	test_cmd_mock_domain(self->ioas_id, 0, &self->stdev_id,
-			     &self->hwpt_id, &self->device_id);
+	test_cmd_mock_domain(self->ioas_id, self->pasid,
+			     &self->stdev_id, &self->hwpt_id,
+			     &self->device_id);
 }
 
 FIXTURE_TEARDOWN(iommufd_device_pasid)
 {
 	teardown_iommufd(self->fd, _metadata);
 }
+
+FIXTURE_VARIANT_ADD(iommufd_device_pasid, siov_pasid_600)
+{
+	.pasid = 600,
+};
 
 TEST_F(iommufd_device_pasid, pasid_attach)
 {
@@ -2006,8 +2017,28 @@ TEST_F(iommufd_device_pasid, pasid_attach)
 		};
 		uint32_t nested_hwpt_id[2] = {};
 		uint32_t parent_hwpt_id = 0;
+		uint32_t new_hwpt_id = 0;
 		uint32_t pasid = 100;
 		bool result;
+
+		if (self->pasid) {
+			ASSERT_EQ(0,
+				  test_cmd_pasid_check_domain(self->fd,
+							      self->stdev_id,
+							      self->pasid,
+							      self->hwpt_id,
+							      &result));
+			EXPECT_EQ(1, result);
+			test_cmd_hwpt_alloc(self->device_id, self->ioas_id, &new_hwpt_id);
+			test_cmd_mock_domain_replace(self->stdev_id, new_hwpt_id);
+			ASSERT_EQ(0,
+				  test_cmd_pasid_check_domain(self->fd,
+							      self->stdev_id,
+							      self->pasid,
+							      new_hwpt_id,
+							      &result));
+			EXPECT_EQ(1, result);
+		}
 
 		/*
 		 * Attach self->ioas_id to pasid 100, should fail since
