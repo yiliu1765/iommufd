@@ -2325,20 +2325,32 @@ FIXTURE(iommufd_device_pasid)
 	uint32_t device_id;
 };
 
+FIXTURE_VARIANT(iommufd_device_pasid)
+{
+	uint32_t pasid;
+};
+
 FIXTURE_SETUP(iommufd_device_pasid)
 {
 	self->fd = open("/dev/iommu", O_RDWR);
 	ASSERT_NE(-1, self->fd);
 	test_ioctl_ioas_alloc(&self->ioas_id);
 
-	test_cmd_mock_domain(self->ioas_id, 0, &self->stdev_id,
-			     &self->hwpt_id, &self->device_id);
+	test_cmd_mock_domain(self->ioas_id, variant->pasid,
+			     &self->stdev_id, &self->hwpt_id,
+			     &self->device_id);
 }
 
 FIXTURE_TEARDOWN(iommufd_device_pasid)
 {
 	teardown_iommufd(self->fd, _metadata);
 }
+
+/* For SIOV test */
+FIXTURE_VARIANT_ADD(iommufd_device_pasid, siov_pasid_600)
+{
+	.pasid = 600, //this is the default pasid for the SIOV virtual device
+};
 
 TEST_F(iommufd_device_pasid, pasid_attach)
 {
@@ -2364,6 +2376,43 @@ TEST_F(iommufd_device_pasid, pasid_attach)
 					   &nested_hwpt_id[1],
 					   IOMMU_HWPT_DATA_SELFTEST,
 					   &data, sizeof(data));
+
+		if (variant->pasid) {
+			uint32_t new_hwpt_id = 0;
+
+			ASSERT_EQ(0,
+				  test_cmd_pasid_check_domain(self->fd,
+							      self->stdev_id,
+							      variant->pasid,
+							      self->hwpt_id,
+							      &result));
+			EXPECT_EQ(1, result);
+			test_cmd_hwpt_alloc(self->device_id, self->ioas_id,
+					    0, &new_hwpt_id);
+			test_cmd_mock_domain_replace(self->stdev_id,
+						     new_hwpt_id);
+			ASSERT_EQ(0,
+				  test_cmd_pasid_check_domain(self->fd,
+							      self->stdev_id,
+							      variant->pasid,
+							      new_hwpt_id,
+							      &result));
+			EXPECT_EQ(1, result);
+
+			/*
+			 * Detach hwpt from variant->pasid, and check if the
+			 * variant->pasid has null domain
+			 */
+			test_cmd_pasid_detach(variant->pasid);
+			ASSERT_EQ(0,
+				  test_cmd_pasid_check_domain(self->fd,
+							      self->stdev_id,
+							      variant->pasid,
+							      0, &result));
+			EXPECT_EQ(1, result);
+
+			test_ioctl_destroy(new_hwpt_id);
+		}
 
 		/*
 		 * Attach ioas to pasid 100, should succeed, domain should
