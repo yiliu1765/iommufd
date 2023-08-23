@@ -644,6 +644,32 @@ TEST_FAIL_NTH(basic_fail_nth, device)
 
 	self->pasid = 0;
 
+	if (_test_ioctl_destroy(self->fd, self->stdev_id))
+		return -1;
+
+	self->pasid = 300;
+	self->stdev_id = 0;
+
+	/* Test for SIOV virtual devices attach */
+	if (_test_cmd_mock_domain(self->fd, ioas_id, self->pasid,
+				  &self->stdev_id, NULL, &idev_id))
+		return -1;
+
+	/* Test for SIOV virtual device replace */
+	if (_test_cmd_mock_domain_replace(self->fd, self->stdev_id,
+					  hwpt_id, NULL))
+		return -1;
+
+	if (_test_cmd_pasid_detach(self->fd, self->stdev_id, self->pasid))
+		return -1;
+
+	self->pasid = 0;
+
+	if (_test_ioctl_destroy(self->fd, self->stdev_id))
+		return -1;
+
+	self->stdev_id = 0;
+
 	return 0;
 }
 
