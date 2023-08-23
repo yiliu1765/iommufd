@@ -71,6 +71,8 @@ struct iommu_test_cmd {
 			__u32 out_hwpt_id;
 			/* out_idev_id is the standard iommufd_bind object */
 			__u32 out_idev_id;
+			/* #0 represents the physical device instead of being invalid */
+			__u32 rid_pasid;
 		} mock_domain;
 		struct {
 			__u32 out_stdev_id;

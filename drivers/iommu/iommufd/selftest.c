@@ -711,8 +711,15 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 		goto out_sobj;
 	}
 
-	idev = iommufd_device_bind(ucmd->ictx, &sobj->idev.mock_dev->dev,
-				   &idev_id);
+	if (cmd->op == IOMMU_TEST_OP_MOCK_DOMAIN_FLAGS ||
+	    !cmd->mock_domain.rid_pasid)
+		idev = iommufd_device_bind(ucmd->ictx, &sobj->idev.mock_dev->dev,
+					   &idev_id);
+	else
+		idev = iommufd_device_bind_pasid(ucmd->ictx,
+						 &sobj->idev.mock_dev->dev,
+						 cmd->mock_domain.rid_pasid,
+						 &idev_id);
 	if (IS_ERR(idev)) {
 		rc = PTR_ERR(idev);
 		goto out_mdev;
