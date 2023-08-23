@@ -57,6 +57,8 @@ struct iommu_test_cmd {
 			__aligned_u64 length;
 		} add_reserved;
 		struct {
+			/* #0 is invalid, any non-zero is meaningful */
+			__u32 default_pasid;
 			__u32 out_stdev_id;
 			__u32 out_hwpt_id;
 			/* out_idev_id is the standard iommufd_bind object */
