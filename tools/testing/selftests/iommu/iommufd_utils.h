@@ -63,14 +63,16 @@ static unsigned long PAGE_SIZE;
 				&test_cmd));                                  \
 	})
 
-static int _test_cmd_mock_domain(int fd, unsigned int ioas_id, __u32 *stdev_id,
-				 __u32 *hwpt_id, __u32 *idev_id)
+static int _test_cmd_mock_domain(int fd, unsigned int ioas_id,
+				 unsigned int rid_pasid,
+				 __u32 *stdev_id, __u32 *hwpt_id,
+				 __u32 *idev_id)
 {
 	struct iommu_test_cmd cmd = {
 		.size = sizeof(cmd),
 		.op = IOMMU_TEST_OP_MOCK_DOMAIN,
 		.id = ioas_id,
-		.mock_domain = {},
+		.mock_domain = { .rid_pasid = rid_pasid, },
 	};
 	int ret;
 
@@ -86,12 +88,13 @@ static int _test_cmd_mock_domain(int fd, unsigned int ioas_id, __u32 *stdev_id,
 		*idev_id = cmd.mock_domain.out_idev_id;
 	return 0;
 }
-#define test_cmd_mock_domain(ioas_id, stdev_id, hwpt_id, idev_id)       \
-	ASSERT_EQ(0, _test_cmd_mock_domain(self->fd, ioas_id, stdev_id, \
-					   hwpt_id, idev_id))
-#define test_err_mock_domain(_errno, ioas_id, stdev_id, hwpt_id)      \
-	EXPECT_ERRNO(_errno, _test_cmd_mock_domain(self->fd, ioas_id, \
-						   stdev_id, hwpt_id, NULL))
+#define test_cmd_mock_domain(ioas_id, pasid, stdev_id, hwpt_id, idev_id)   \
+	ASSERT_EQ(0, _test_cmd_mock_domain(self->fd, ioas_id, pasid,       \
+					   stdev_id, hwpt_id, idev_id))
+#define test_err_mock_domain(_errno, ioas_id, pasid, stdev_id, hwpt_id)    \
+	EXPECT_ERRNO(_errno, _test_cmd_mock_domain(self->fd, ioas_id,      \
+						   pasid, stdev_id,        \
+						   hwpt_id, NULL))
 
 static int _test_cmd_mock_domain_flags(int fd, unsigned int ioas_id,
 				       __u32 stdev_flags, __u32 *stdev_id,
