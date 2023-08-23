@@ -67,6 +67,8 @@ struct iommu_test_cmd {
 			__aligned_u64 length;
 		} add_reserved;
 		struct {
+			/* #0 represents the physical device instead of being invalid */
+			__u32 rid_pasid;
 			__u32 out_stdev_id;
 			__u32 out_hwpt_id;
 			/* out_idev_id is the standard iommufd_bind object */
