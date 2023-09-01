@@ -14,6 +14,7 @@
 #include <linux/err.h>
 #include <linux/of.h>
 #include <uapi/linux/iommu.h>
+#include <uapi/linux/iommufd.h>
 
 #define IOMMU_READ	(1 << 0)
 #define IOMMU_WRITE	(1 << 1)
@@ -228,6 +229,41 @@ struct iommu_iotlb_gather {
 };
 
 /**
+ * struct iommu_user_data - iommu driver specific user space data info
+ * @uptr: Pointer to the user buffer for copy_from_user()
+ * @len: The length of the user buffer in bytes
+ *
+ * A user space data is an uAPI that is defined in include/uapi/linux/iommufd.h
+ * Both @uptr and @len should be just copied from an iommufd core uAPI structure
+ */
+struct iommu_user_data {
+	void __user *uptr;
+	size_t len;
+};
+
+/**
+ * iommu_copy_user_data - Copy iommu driver specific user space data
+ * @dst_data: Pointer to an iommu driver specific user data that is defined in
+ *            include/uapi/linux/iommufd.h
+ * @src_data: Pointer to a struct iommu_user_data for user space data info
+ * @data_len: Length of current user data structure, i.e. sizeof(struct _dst)
+ * @min_len: Initial length of user data structure for backward compatibility.
+ *           This should be offsetofend using the last member in the user data
+ *           struct that was initially added to include/uapi/linux/iommufd.h
+ */
+static inline int iommu_copy_user_data(void *dst_data,
+				       const struct iommu_user_data *src_data,
+				       size_t data_len, size_t min_len)
+{
+	if (WARN_ON(!dst_data || !src_data))
+		return -EINVAL;
+	if (src_data->len < min_len || data_len < src_data->len)
+		return -EINVAL;
+	return copy_struct_from_user(dst_data, data_len,
+				     src_data->uptr, src_data->len);
+}
+
+/**
  * struct iommu_ops - iommu ops and capabilities
  * @capable: check capability
  * @hw_info: report iommu hardware information. The data buffer returned by this
@@ -237,11 +273,16 @@ struct iommu_iotlb_gather {
  * @domain_alloc: allocate iommu domain
  * @domain_alloc_user: Allocate a user iommu domain corresponding to the input
  *                     parameters like flags defined as enum iommufd_ioas_map_flags
+ *                     and the @hwpt_type that is defined as enum iommu_hwpt_type
  *                     in include/uapi/linux/iommufd.h. Different from the
  *                     domain_alloc, it requires iommu driver to fully initialize
  *                     a new domain including the generic iommu_domain struct.
- *                     Upon success, the new domain must be IOMMU_DOMAIN_UNMANAGED
- *                     type. Upon failure, ERR_PTR must be returned.
+ *                     Upon success, if the @user_data is valid and the @parent
+ *                     points to a kernel-managed domain, the new domain must be
+ *                     IOMMU_DOMAIN_NESTED type; otherwise, the @parent must be
+ *                     NULL while the @user_data can be optionally provided, the
+ *                     new domain must be IOMMU_DOMAIN_UNMANAGED type.
+ *                     Upon failure, ERR_PTR must be returned.
  * @probe_device: Add device to iommu driver handling
  * @release_device: Remove device from iommu driver handling
  * @probe_finalize: Do final setup work after the device is added to an IOMMU
@@ -274,7 +315,11 @@ struct iommu_ops {
 
 	/* Domain allocation and freeing by the iommu driver */
 	struct iommu_domain *(*domain_alloc)(unsigned iommu_domain_type);
-	struct iommu_domain *(*domain_alloc_user)(struct device *dev, u32 flags);
+	struct iommu_domain *(*domain_alloc_user)(struct device *dev,
+						  enum iommu_hwpt_type hwpt_type,
+						  u32 flags,
+						  struct iommu_domain *parent,
+						  const struct iommu_user_data *user_data);
 
 	struct iommu_device *(*probe_device)(struct device *dev);
 	void (*release_device)(struct device *dev);
