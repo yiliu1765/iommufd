@@ -235,6 +235,13 @@ struct iommu_iotlb_gather {
  *           use. The information type is one of enum iommu_hw_info_type defined
  *           in include/uapi/linux/iommufd.h.
  * @domain_alloc: allocate iommu domain
+ * @domain_alloc_user: Allocate an iommu domain corresponding to the input
+ *                     parameters like flags defined as enum iommufd_ioas_map_flags
+ *                     in include/uapi/linux/iommufd.h. Different from the
+ *                     domain_alloc op, it requires iommu driver to fully
+ *                     initialize a new domain including the generic iommu_domain
+ *                     struct. Upon success, a domain is returned. Upon failure,
+ *                     ERR_PTR must be returned.
  * @probe_device: Add device to iommu driver handling
  * @release_device: Remove device from iommu driver handling
  * @probe_finalize: Do final setup work after the device is added to an IOMMU
@@ -267,6 +274,7 @@ struct iommu_ops {
 
 	/* Domain allocation and freeing by the iommu driver */
 	struct iommu_domain *(*domain_alloc)(unsigned iommu_domain_type);
+	struct iommu_domain *(*domain_alloc_user)(struct device *dev, u32 flags);
 
 	struct iommu_device *(*probe_device)(struct device *dev);
 	void (*release_device)(struct device *dev);
