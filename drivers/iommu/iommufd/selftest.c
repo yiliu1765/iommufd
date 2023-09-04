@@ -166,6 +166,17 @@ static struct iommu_domain *mock_domain_alloc(unsigned int iommu_domain_type)
 	return &mock->domain;
 }
 
+static struct iommu_domain *
+mock_domain_alloc_user(struct device *dev, u32 flags)
+{
+	struct iommu_domain *domain;
+
+	domain = iommu_domain_alloc(dev->bus);
+	if (!domain)
+		domain = ERR_PTR(-ENOMEM);
+	return domain;
+}
+
 static void mock_domain_free(struct iommu_domain *domain)
 {
 	struct mock_iommu_domain *mock =
@@ -307,6 +318,7 @@ static const struct iommu_ops mock_ops = {
 	.pgsize_bitmap = MOCK_IO_PAGE_SIZE,
 	.hw_info = mock_domain_hw_info,
 	.domain_alloc = mock_domain_alloc,
+	.domain_alloc_user = mock_domain_alloc_user,
 	.capable = mock_domain_capable,
 	.set_platform_dma_ops = mock_domain_set_plaform_dma_ops,
 	.device_group = generic_device_group,
