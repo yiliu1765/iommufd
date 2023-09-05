@@ -281,6 +281,24 @@ static inline void iommufd_hw_pagetable_put(struct iommufd_ctx *ictx,
 		refcount_dec(&hwpt->obj.users);
 }
 
+static inline bool
+iommufd_hw_pagetable_compare_ioas(struct iommufd_hw_pagetable *old_hwpt,
+				  struct iommufd_hw_pagetable *new_hwpt)
+{
+	struct iommufd_ioas *old_ioas, *new_ioas;
+
+	WARN_ON(!old_hwpt || !new_hwpt);
+	if (old_hwpt->user_managed)
+		old_ioas = old_hwpt->parent->ioas;
+	else
+		old_ioas = old_hwpt->ioas;
+	if (new_hwpt->user_managed)
+		new_ioas = new_hwpt->parent->ioas;
+	else
+		new_ioas = new_hwpt->ioas;
+	return old_ioas != new_ioas;
+}
+
 struct iommufd_group {
 	struct kref ref;
 	struct mutex lock;
