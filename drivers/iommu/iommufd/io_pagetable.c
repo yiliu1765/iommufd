@@ -610,7 +610,7 @@ int iopt_reserve_iova(struct io_pagetable *iopt, unsigned long start,
 	return 0;
 }
 
-static void __iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner)
+void __iopt_remove_reserved_iova(struct io_pagetable *iopt, void *owner)
 {
 	struct iopt_reserved *reserved, *next;
 
@@ -1170,10 +1170,10 @@ void iopt_remove_access(struct io_pagetable *iopt,
 }
 
 /* Narrow the valid_iova_itree to include reserved ranges from a device. */
-int iopt_table_enforce_dev_resv_regions(struct io_pagetable *iopt,
-					struct device *dev,
-					phys_addr_t *sw_msi_start,
-					bool sw_msi_only)
+int __iopt_table_enforce_dev_resv_regions(struct io_pagetable *iopt,
+					  struct device *dev,
+					  phys_addr_t *sw_msi_start,
+					  bool sw_msi_only)
 {
 	struct iommu_resv_region *resv;
 	LIST_HEAD(resv_regions);
@@ -1181,10 +1181,11 @@ int iopt_table_enforce_dev_resv_regions(struct io_pagetable *iopt,
 	unsigned int num_sw_msi = 0;
 	int rc;
 
+	lockdep_assert_held(&iopt->iova_rwsem);
+
 	if (iommufd_should_fail())
 		return -EINVAL;
 
-	down_write(&iopt->iova_rwsem);
 	/* FIXME: drivers allocate memory but there is no failure propogated */
 	iommu_get_resv_regions(dev, &resv_regions);
 
@@ -1220,6 +1221,22 @@ out_reserved:
 	__iopt_remove_reserved_iova(iopt, dev);
 out_free_resv:
 	iommu_put_resv_regions(dev, &resv_regions);
+	return rc;
+}
+
+/* Narrow the valid_iova_itree to include reserved ranges from a device. */
+int iopt_table_enforce_dev_resv_regions(struct io_pagetable *iopt,
+					struct device *dev,
+					phys_addr_t *sw_msi_start,
+					bool sw_msi_only)
+{
+	int rc;
+
+	if (iommufd_should_fail())
+		return -EINVAL;
+	down_write(&iopt->iova_rwsem);
+	rc = __iopt_table_enforce_dev_resv_regions(iopt, dev, sw_msi_start,
+						   sw_msi_only);
 	up_write(&iopt->iova_rwsem);
 	return rc;
 }
