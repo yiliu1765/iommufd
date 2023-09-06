@@ -368,6 +368,71 @@ static void iommufd_hw_pagetable_remove_rr(struct iommufd_hw_pagetable *hwpt,
 	iopt_remove_reserved_iova(&to_hwpt_paging(hwpt)->ioas->iopt, idev->dev);
 }
 
+/* Must be called when new_ioas == old_ioas */
+static int iommufd_group_replace_rr(struct iommufd_group *igroup,
+				    struct iommufd_hw_pagetable *old_hwpt,
+				    struct iommufd_hw_pagetable *new_hwpt)
+{
+	struct iommufd_ioas *old_ioas, *new_ioas;
+	struct iommufd_device *cur;
+	struct io_pagetable *iopt;
+	bool sw_msi_only;
+	int rc;
+
+	if (WARN_ON(!old_hwpt || !new_hwpt))
+		return -EINVAL;
+
+	/*
+	 * If both hwpts are kernel-managed ones, all the reserved regions are
+	 * already enforced on the iopt. If both hwpts are user-managed ones,
+	 * IOMMU_RESV_SW_MSI is already enforced.
+	 */
+	if (old_hwpt->obj.type == IOMMUFD_OBJ_HWPT_NESTED &&
+	    new_hwpt->obj.type == IOMMUFD_OBJ_HWPT_NESTED)
+		return 0;
+
+	/*
+	 * Even if the new hw_pagetable is a NESTED hwpt managed by user space,
+	 * it has to enforce IOMMU_RESV_SW_MSI (only!) on its associated PAGING
+	 * hw_pagetable managed by the kernel.
+	 */
+	if (new_hwpt->obj.type == IOMMUFD_OBJ_HWPT_NESTED)
+		sw_msi_only = true;
+	else
+		sw_msi_only = false;
+
+	old_ioas = to_hwpt_paging(old_hwpt)->ioas;
+	new_ioas = to_hwpt_paging(new_hwpt)->ioas;
+	if (WARN_ON(old_ioas != new_ioas))
+		return -EINVAL;
+
+	iopt = &old_ioas->iopt;
+
+	/*
+	 * Otherwise, there must be a reserved region change on the iopt. Clean
+	 * all the existing regions first, and then re-enforce different one(s).
+	 */
+	down_write(&iopt->iova_rwsem);
+	list_for_each_entry(cur, &igroup->device_list, group_item) {
+		__iopt_remove_reserved_iova(iopt, cur->dev);
+		rc = __iopt_table_enforce_dev_resv_regions(iopt, cur->dev,
+							   NULL, sw_msi_only);
+		if (rc)
+			goto out_fallback;
+	}
+	up_write(&iopt->iova_rwsem);
+	return 0;
+
+out_fallback:
+	list_for_each_entry(cur, &igroup->device_list, group_item) {
+		__iopt_remove_reserved_iova(iopt, cur->dev);
+		WARN_ON(__iopt_table_enforce_dev_resv_regions(iopt, cur->dev,
+							NULL, !sw_msi_only));
+	}
+	up_write(&iopt->iova_rwsem);
+	return rc;
+}
+
 int iommufd_hw_pagetable_attach(struct iommufd_hw_pagetable *hwpt,
 				struct iommufd_device *idev)
 {
@@ -467,6 +532,10 @@ iommufd_device_do_replace(struct iommufd_device *idev,
 			if (rc)
 				goto err_unresv;
 		}
+	} else { /* old_hwpt and hwpt are associated to the same IOAS */
+		rc = iommufd_group_replace_rr(igroup, old_hwpt, hwpt);
+		if (rc)
+			goto err_unlock;
 	}
 
 	rc = iommu_group_replace_domain(igroup->group, hwpt->domain);
@@ -494,8 +563,12 @@ iommufd_device_do_replace(struct iommufd_device *idev,
 	/* Caller must destroy old_hwpt */
 	return old_hwpt;
 err_unresv:
-	list_for_each_entry(cur, &igroup->device_list, group_item)
-		iommufd_hw_pagetable_remove_rr(hwpt, cur);
+	if (to_hwpt_paging(hwpt)->ioas != to_hwpt_paging(old_hwpt)->ioas) {
+		list_for_each_entry(cur, &igroup->device_list, group_item)
+			iommufd_hw_pagetable_remove_rr(hwpt, cur);
+	} else {
+		WARN_ON(iommufd_group_replace_rr(igroup, hwpt, old_hwpt));
+	}
 err_unlock:
 	mutex_unlock(&idev->igroup->lock);
 	return ERR_PTR(rc);
