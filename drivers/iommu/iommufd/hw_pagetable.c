@@ -8,56 +8,61 @@
 #include "../iommu-priv.h"
 #include "iommufd_private.h"
 
-void iommufd_hw_pagetable_destroy(struct iommufd_object *obj)
+void iommufd_hwpt_paging_destroy(struct iommufd_object *obj)
 {
 	struct iommufd_hw_pagetable *hwpt =
 		container_of(obj, struct iommufd_hw_pagetable, obj);
+	struct iommufd_hwpt_paging *hwpt_paging = to_hwpt_paging(hwpt);
 
-	if (!list_empty(&hwpt->hwpt_item)) {
-		mutex_lock(&hwpt->ioas->mutex);
-		list_del(&hwpt->hwpt_item);
-		mutex_unlock(&hwpt->ioas->mutex);
+	if (!list_empty(&hwpt_paging->hwpt_item)) {
+		mutex_lock(&hwpt_paging->ioas->mutex);
+		list_del(&hwpt_paging->hwpt_item);
+		mutex_unlock(&hwpt_paging->ioas->mutex);
 
-		iopt_table_remove_domain(&hwpt->ioas->iopt, hwpt->domain);
+		iopt_table_remove_domain(&hwpt_paging->ioas->iopt, hwpt->domain);
 	}
 
 	if (hwpt->domain)
 		iommu_domain_free(hwpt->domain);
 
-	refcount_dec(&hwpt->ioas->obj.users);
+	refcount_dec(&hwpt_paging->ioas->obj.users);
 }
 
-void iommufd_hw_pagetable_abort(struct iommufd_object *obj)
+void iommufd_hwpt_paging_abort(struct iommufd_object *obj)
 {
 	struct iommufd_hw_pagetable *hwpt =
 		container_of(obj, struct iommufd_hw_pagetable, obj);
+	struct iommufd_hwpt_paging *hwpt_paging = to_hwpt_paging(hwpt);
 
 	/* The ioas->mutex must be held until finalize is called. */
-	lockdep_assert_held(&hwpt->ioas->mutex);
+	lockdep_assert_held(&hwpt_paging->ioas->mutex);
 
-	if (!list_empty(&hwpt->hwpt_item)) {
-		list_del_init(&hwpt->hwpt_item);
-		iopt_table_remove_domain(&hwpt->ioas->iopt, hwpt->domain);
+	if (!list_empty(&hwpt_paging->hwpt_item)) {
+		list_del_init(&hwpt_paging->hwpt_item);
+		iopt_table_remove_domain(&hwpt_paging->ioas->iopt, hwpt->domain);
 	}
-	iommufd_hw_pagetable_destroy(obj);
+	iommufd_hwpt_paging_destroy(obj);
 }
 
-static int iommufd_hw_pagetable_enforce_cc(struct iommufd_hw_pagetable *hwpt)
+static int
+iommufd_hw_pagetable_enforce_cc(struct iommufd_hwpt_paging *hwpt_paging)
 {
-	if (hwpt->enforce_cache_coherency)
+	struct iommu_domain *paging_domain = hwpt_paging->common.domain;
+
+	if (hwpt_paging->enforce_cache_coherency)
 		return 0;
 
-	if (hwpt->domain->ops->enforce_cache_coherency)
-		hwpt->enforce_cache_coherency =
-			hwpt->domain->ops->enforce_cache_coherency(
-				hwpt->domain);
-	if (!hwpt->enforce_cache_coherency)
+	if (paging_domain->ops->enforce_cache_coherency)
+		hwpt_paging->enforce_cache_coherency =
+			paging_domain->ops->enforce_cache_coherency(
+				paging_domain);
+	if (!hwpt_paging->enforce_cache_coherency)
 		return -EINVAL;
 	return 0;
 }
 
 /**
- * iommufd_hw_pagetable_alloc() - Get an iommu_domain for a device
+ * iommufd_hw_pagetable_alloc_paging() - Get a PAGING iommu_domain for a device
  * @ictx: iommufd context
  * @ioas: IOAS to associate the domain with
  * @idev: Device to get an iommu_domain for
@@ -73,11 +78,13 @@ static int iommufd_hw_pagetable_enforce_cc(struct iommufd_hw_pagetable *hwpt)
  * the returned hwpt.
  */
 struct iommufd_hw_pagetable *
-iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
-			   struct iommufd_device *idev, u32 flags,
-			   bool immediate_attach)
+iommufd_hw_pagetable_alloc_paging(struct iommufd_ctx *ictx,
+				  struct iommufd_ioas *ioas,
+				  struct iommufd_device *idev,
+				  u32 flags, bool immediate_attach)
 {
 	const struct iommu_ops *ops = dev_iommu_ops(idev->dev);
+	struct iommufd_hwpt_paging *hwpt_paging;
 	struct iommufd_hw_pagetable *hwpt;
 	int rc;
 
@@ -86,14 +93,17 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 	if (flags && !ops->domain_alloc_user)
 		return ERR_PTR(-EOPNOTSUPP);
 
-	hwpt = iommufd_object_alloc(ictx, hwpt, IOMMUFD_OBJ_HWPT_PAGING);
+	hwpt = container_of(_iommufd_object_alloc(ictx, sizeof(*hwpt_paging),
+						  IOMMUFD_OBJ_HWPT_PAGING),
+			    typeof(*hwpt), obj);
 	if (IS_ERR(hwpt))
 		return hwpt;
+	hwpt_paging = to_hwpt_paging(hwpt);
 
-	INIT_LIST_HEAD(&hwpt->hwpt_item);
+	INIT_LIST_HEAD(&hwpt_paging->hwpt_item);
 	/* Pairs with iommufd_hw_pagetable_destroy() */
 	refcount_inc(&ioas->obj.users);
-	hwpt->ioas = ioas;
+	hwpt_paging->ioas = ioas;
 
 	if (ops->domain_alloc_user) {
 		hwpt->domain = ops->domain_alloc_user(idev->dev, flags,
@@ -119,7 +129,7 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 	 * a new domain.
 	 */
 	if (idev->enforce_cache_coherency) {
-		rc = iommufd_hw_pagetable_enforce_cc(hwpt);
+		rc = iommufd_hw_pagetable_enforce_cc(hwpt_paging);
 		if (WARN_ON(rc))
 			goto out_abort;
 	}
@@ -136,10 +146,10 @@ iommufd_hw_pagetable_alloc(struct iommufd_ctx *ictx, struct iommufd_ioas *ioas,
 			goto out_abort;
 	}
 
-	rc = iopt_table_add_domain(&hwpt->ioas->iopt, hwpt->domain);
+	rc = iopt_table_add_domain(&ioas->iopt, hwpt->domain);
 	if (rc)
 		goto out_detach;
-	list_add_tail(&hwpt->hwpt_item, &hwpt->ioas->hwpt_list);
+	list_add_tail(&hwpt_paging->hwpt_item, &ioas->hwpt_list);
 	return hwpt;
 
 out_detach:
@@ -172,8 +182,8 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	}
 
 	mutex_lock(&ioas->mutex);
-	hwpt = iommufd_hw_pagetable_alloc(ucmd->ictx, ioas,
-					  idev, cmd->flags, false);
+	hwpt = iommufd_hw_pagetable_alloc_paging(ucmd->ictx, ioas,
+						 idev, cmd->flags, false);
 	if (IS_ERR(hwpt)) {
 		rc = PTR_ERR(hwpt);
 		goto out_unlock;
