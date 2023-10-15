@@ -44,6 +44,23 @@ void iommufd_hwpt_paging_abort(struct iommufd_object *obj)
 	iommufd_hwpt_paging_destroy(obj);
 }
 
+void iommufd_hwpt_nested_destroy(struct iommufd_object *obj)
+{
+	struct iommufd_hw_pagetable *hwpt =
+		container_of(obj, struct iommufd_hw_pagetable, obj);
+	struct iommufd_hwpt_nested *hwpt_nested = to_hwpt_nested(hwpt);
+
+	if (hwpt->domain)
+		iommu_domain_free(hwpt->domain);
+
+	refcount_dec(&hwpt_nested->parent->common.obj.users);
+}
+
+void iommufd_hwpt_nested_abort(struct iommufd_object *obj)
+{
+	iommufd_hwpt_nested_destroy(obj);
+}
+
 static int
 iommufd_hw_pagetable_enforce_cc(struct iommufd_hwpt_paging *hwpt_paging)
 {
@@ -104,6 +121,7 @@ iommufd_hw_pagetable_alloc_paging(struct iommufd_ctx *ictx,
 	/* Pairs with iommufd_hw_pagetable_destroy() */
 	refcount_inc(&ioas->obj.users);
 	hwpt_paging->ioas = ioas;
+	hwpt_paging->nest_parent = flags & IOMMU_HWPT_ALLOC_NEST_PARENT;
 
 	if (ops->domain_alloc_user) {
 		hwpt->domain = ops->domain_alloc_user(idev->dev, flags,
@@ -160,9 +178,80 @@ out_abort:
 	return ERR_PTR(rc);
 }
 
+/**
+ * iommufd_hw_pagetable_alloc_nested() - Get a NESTED iommu_domain for a device
+ * @ictx: iommufd context
+ * @parent: Parent PAGING-type hwpt to associate the domain with
+ * @idev: Device to get an iommu_domain for
+ * @user_data: user_data pointer. Must be valid
+ *
+ * Allocate a new iommu_domain (must be IOMMU_DOMAIN_NESTED) and return it as
+ * a NESTED hw_pagetable. The given parent PAGING-type hwpt must be capable of
+ * being a parent.
+ */
+static struct iommufd_hw_pagetable *
+iommufd_hw_pagetable_alloc_nested(struct iommufd_ctx *ictx,
+				  struct iommufd_hwpt_paging *parent,
+				  struct iommufd_device *idev,
+				  const struct iommu_user_data *user_data)
+{
+	const struct iommu_ops *ops = dev_iommu_ops(idev->dev);
+	struct iommufd_hwpt_nested *hwpt_nested;
+	struct iommufd_hw_pagetable *hwpt;
+	int rc;
+
+	if (!user_data)
+		return ERR_PTR(-EINVAL);
+	if (user_data->type == IOMMU_HWPT_DATA_NONE)
+		return ERR_PTR(-EINVAL);
+	if (parent->auto_domain)
+		return ERR_PTR(-EINVAL);
+	if (!parent->nest_parent)
+		return ERR_PTR(-EINVAL);
+
+	if (!ops->domain_alloc_user)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	hwpt = container_of(_iommufd_object_alloc(ictx, sizeof(*hwpt_nested),
+						  IOMMUFD_OBJ_HWPT_NESTED),
+			    typeof(*hwpt), obj);
+	if (IS_ERR(hwpt))
+		return hwpt;
+
+	refcount_inc(&parent->common.obj.users);
+	hwpt_nested = to_hwpt_nested(hwpt);
+	hwpt_nested->parent = parent;
+
+	hwpt->domain = ops->domain_alloc_user(idev->dev, 0,
+					      parent->common.domain,
+					      user_data);
+	if (IS_ERR(hwpt->domain)) {
+		rc = PTR_ERR(hwpt->domain);
+		hwpt->domain = NULL;
+		goto out_abort;
+	}
+
+	if (WARN_ON_ONCE(hwpt->domain->type != IOMMU_DOMAIN_NESTED)) {
+		rc = -EINVAL;
+		goto out_abort;
+	}
+	return hwpt;
+
+out_abort:
+	iommufd_object_abort_and_destroy(ictx, &hwpt->obj);
+	return ERR_PTR(rc);
+}
+
+
 int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 {
 	struct iommu_hwpt_alloc *cmd = ucmd->cmd;
+	const struct iommu_user_data user_data = {
+		.type = cmd->data_type,
+		.uptr = u64_to_user_ptr(cmd->data_uptr),
+		.len = cmd->data_len,
+	};
+	struct iommufd_hwpt_paging *parent;
 	struct iommufd_hw_pagetable *hwpt;
 	struct iommufd_ioas *ioas = NULL;
 	struct iommufd_object *pt_obj;
@@ -171,6 +260,11 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 
 	if ((cmd->flags & (~IOMMU_HWPT_ALLOC_NEST_PARENT)) || cmd->__reserved)
 		return -EOPNOTSUPP;
+	if (!cmd->data_len && cmd->data_type != IOMMU_HWPT_DATA_NONE)
+		return -EINVAL;
+	if (cmd->flags & IOMMU_HWPT_ALLOC_NEST_PARENT &&
+	    cmd->data_type != IOMMU_HWPT_DATA_NONE)
+		return -EINVAL;
 
 	idev = iommufd_get_device(ucmd, cmd->dev_id);
 	if (IS_ERR(idev))
@@ -188,6 +282,13 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 		mutex_lock(&ioas->mutex);
 		hwpt = iommufd_hw_pagetable_alloc_paging(ucmd->ictx, ioas, idev,
 							 cmd->flags, false);
+		break;
+	case IOMMUFD_OBJ_HWPT_PAGING:
+		parent = to_hwpt_paging(
+				container_of(pt_obj, typeof(*hwpt), obj));
+		hwpt = iommufd_hw_pagetable_alloc_nested(ucmd->ictx, parent,
+							 idev, user_data.len ?
+							 &user_data : NULL);
 		break;
 	default:
 		rc = -EINVAL;
