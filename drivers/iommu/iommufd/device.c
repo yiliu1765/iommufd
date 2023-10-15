@@ -333,10 +333,11 @@ static int iommufd_hw_pagetable_enforce_rr(struct iommufd_hw_pagetable *hwpt,
 {
 	phys_addr_t *sw_msi_start = &idev->igroup->sw_msi_start;
 	struct iommufd_hwpt_paging *hwpt_paging;
+	bool sw_msi_only = false;
 	int rc;
 
-	if (hwpt->obj.type != IOMMUFD_OBJ_HWPT_PAGING)
-		return 0;
+	if (hwpt->obj.type == IOMMUFD_OBJ_HWPT_NESTED)
+		sw_msi_only = true;
 
 	hwpt_paging = to_hwpt_paging(hwpt);
 
@@ -345,7 +346,8 @@ static int iommufd_hw_pagetable_enforce_rr(struct iommufd_hw_pagetable *hwpt,
 		sw_msi_start = NULL;
 
 	rc = iopt_table_enforce_dev_resv_regions(&hwpt_paging->ioas->iopt,
-						 idev->dev, sw_msi_start);
+						 idev->dev, sw_msi_start,
+						 sw_msi_only);
 	if (rc)
 		return rc;
 
@@ -363,8 +365,6 @@ static int iommufd_hw_pagetable_enforce_rr(struct iommufd_hw_pagetable *hwpt,
 static void iommufd_hw_pagetable_remove_rr(struct iommufd_hw_pagetable *hwpt,
 					   struct iommufd_device *idev)
 {
-	if (hwpt->obj.type != IOMMUFD_OBJ_HWPT_PAGING)
-		return;
 	iopt_remove_reserved_iova(&to_hwpt_paging(hwpt)->ioas->iopt, idev->dev);
 }
 
