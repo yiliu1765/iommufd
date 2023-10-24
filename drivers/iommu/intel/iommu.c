@@ -4079,6 +4079,7 @@ intel_iommu_domain_alloc_user(struct device *dev, u32 flags)
 {
 	struct iommu_domain *domain;
 	struct intel_iommu *iommu;
+	bool request_nested_parent;
 
 	if (flags & (~IOMMU_HWPT_ALLOC_NEST_PARENT))
 		return ERR_PTR(-EOPNOTSUPP);
@@ -4087,7 +4088,9 @@ intel_iommu_domain_alloc_user(struct device *dev, u32 flags)
 	if (!iommu)
 		return ERR_PTR(-ENODEV);
 
-	if ((flags & IOMMU_HWPT_ALLOC_NEST_PARENT) && !ecap_nest(iommu->ecap))
+	request_nested_parent = flags & IOMMU_HWPT_ALLOC_NEST_PARENT;
+
+	if (request_nested_parent && !nested_supported(iommu))
 		return ERR_PTR(-EOPNOTSUPP);
 
 	/*
@@ -4097,7 +4100,13 @@ intel_iommu_domain_alloc_user(struct device *dev, u32 flags)
 	 */
 	domain = iommu_domain_alloc(dev->bus);
 	if (!domain)
-		domain = ERR_PTR(-ENOMEM);
+		return ERR_PTR(-ENOMEM);
+
+	if (request_nested_parent && to_dmar_domain(domain)->use_first_level) {
+		iommu_domain_free(domain);
+		return ERR_PTR(-EOPNOTSUPP);
+	}
+
 	return domain;
 }
 
