@@ -1512,6 +1512,19 @@ struct vfio_device_feature_bus_master {
 };
 #define VFIO_DEVICE_FEATURE_BUS_MASTER 10
 
+/**
+ * Upon VFIO_DEVICE_FEATURE_GET, return the PASID capability for the device.
+ * Zero width means no support for PASID.
+ */
+struct vfio_device_feature_pasid {
+	__u16 capabilities;
+#define VFIO_DEVICE_PASID_CAP_EXEC	(1 << 0)
+#define VFIO_DEVICE_PASID_CAP_PRIV	(1 << 1)
+	__u8 width;
+	__u8 __reserved;
+};
+#define VFIO_DEVICE_FEATURE_PASID 11
+
 /* -------- API for Type1 VFIO IOMMU -------- */
 
 /**
