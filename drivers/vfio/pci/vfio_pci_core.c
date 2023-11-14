@@ -1495,6 +1495,34 @@ static int vfio_pci_core_feature_token(struct vfio_device *device, u32 flags,
 	return 0;
 }
 
+static int vfio_pci_core_feature_pasid(struct vfio_device *device, u32 flags,
+				       uuid_t __user *arg, size_t argsz)
+{
+	struct vfio_pci_core_device *vdev =
+		container_of(device, struct vfio_pci_core_device, vdev);
+	struct vfio_device_feature_pasid pasid = { 0 };
+	struct pci_dev *pdev = vdev->pdev;
+	int ret;
+
+	/* We do not support SET of the PASID capability */
+	ret = vfio_check_feature(flags, argsz, VFIO_DEVICE_FEATURE_GET,
+				 sizeof(pasid));
+	if (ret != 1)
+		return ret;
+
+	if (!pdev->pasid_enabled)
+		return -ENOTTY;
+
+#ifdef CONFIG_PCI_PASID
+	pci_read_config_dword(pdev, pdev->pasid_cap, &pasid.header);
+	pci_read_config_dword(pdev, pdev->pasid_cap + PCI_PASID_CAP, &pasid.cap_ctrl);
+#endif
+
+	if (copy_to_user(arg, &pasid, sizeof(pasid)))
+		return -EFAULT;
+	return 0;
+}
+
 int vfio_pci_core_ioctl_feature(struct vfio_device *device, u32 flags,
 				void __user *arg, size_t argsz)
 {
@@ -1508,6 +1536,8 @@ int vfio_pci_core_ioctl_feature(struct vfio_device *device, u32 flags,
 		return vfio_pci_core_pm_exit(device, flags, arg, argsz);
 	case VFIO_DEVICE_FEATURE_PCI_VF_TOKEN:
 		return vfio_pci_core_feature_token(device, flags, arg, argsz);
+	case VFIO_DEVICE_FEATURE_PASID:
+		return vfio_pci_core_feature_pasid(device, flags, arg, argsz);
 	default:
 		return -ENOTTY;
 	}
