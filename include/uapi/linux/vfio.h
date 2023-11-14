@@ -1512,6 +1512,15 @@ struct vfio_device_feature_bus_master {
 };
 #define VFIO_DEVICE_FEATURE_BUS_MASTER 10
 
+/**
+ * Upon VFIO_DEVICE_FEATURE_GET, get the PASID capability for the device.
+ */
+struct vfio_device_feature_pasid {
+	__u32 header;
+	__u32 cap_ctrl;
+};
+#define VFIO_DEVICE_FEATURE_PASID 11
+
 /* -------- API for Type1 VFIO IOMMU -------- */
 
 /**
