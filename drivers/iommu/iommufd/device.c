@@ -1178,7 +1178,6 @@ int iommufd_get_hw_info(struct iommufd_ucmd *ucmd)
 	const struct iommu_ops *ops;
 	struct iommufd_device *idev;
 	unsigned int data_len;
-	unsigned int copy_len;
 	void *data;
 	int rc;
 
@@ -1212,22 +1211,9 @@ int iommufd_get_hw_info(struct iommufd_ucmd *ucmd)
 		data = NULL;
 	}
 
-	copy_len = min(cmd->data_len, data_len);
-	if (copy_to_user(user_ptr, data, copy_len)) {
-		rc = -EFAULT;
+	rc = iommu_copy_to_user(user_ptr, cmd->data_len, data, data_len);
+	if (rc)
 		goto out_free;
-	}
-
-	/*
-	 * Zero the trailing bytes if the user buffer is bigger than the
-	 * data size kernel actually has.
-	 */
-	if (copy_len < cmd->data_len) {
-		if (clear_user(user_ptr + copy_len, cmd->data_len - copy_len)) {
-			rc = -EFAULT;
-			goto out_free;
-		}
-	}
 
 	/*
 	 * We return the length the kernel supports so userspace may know what

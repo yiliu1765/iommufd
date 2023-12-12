@@ -402,6 +402,41 @@ __iommu_copy_struct_from_user_array(void *dst_data,
 							min_last), entry_uptr)
 
 /**
+ * iommu_copy_to_user - Copy data to user
+ * @udst: Destination address, in user space.
+ * @usize: Number of bytes user buffer is.
+ * @ksrc: Source address, in kernel space.
+ * @ksize: Number of bytes kernel has.
+ *
+ *  @ksize is just sizeof(*dst), and @usize should've been passed by userspace.
+ *
+ *  * If @usize == @ksize, copied verbatim.
+ *  * If @usize < @ksize, @usize bytes are copied from @ksrc, the trailing bytes
+ *  * (@ksize - @usize) of @ksrc are dropped.
+ *  * If @usize > @ksize, @ksize bytes are copied from @ksrc, the trailing bytes
+ *    (@usize - @ksize) of @udst are zeroed.
+ *
+ * Return 0 for success, otherwise -error.
+ */
+static __always_inline __must_check int
+iommu_copy_to_user(void __user *udst, unsigned long usize,
+		   const void *ksrc, unsigned long ksize)
+{
+	unsigned long copy_len = min(usize, ksize);
+
+	if (copy_to_user(udst, ksrc, copy_len))
+		return -EFAULT;
+
+	/*
+	 * Zero the trailing bytes if the user buffer is bigger than the
+	 * data size kernel actually has.
+	 */
+	if (copy_len < usize && clear_user(udst + copy_len, usize - copy_len))
+		return -EFAULT;
+	return 0;
+}
+
+/**
  * struct iommu_ops - iommu ops and capabilities
  * @capable: check capability
  * @hw_info: report iommu hardware information. The data buffer returned by this
