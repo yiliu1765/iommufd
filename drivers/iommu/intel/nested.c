@@ -125,15 +125,24 @@ static void intel_nested_flush_iotlb_all(struct iommu_domain *domain,
 	}
 }
 
-static void domain_flush_iotlb_psi(struct dmar_domain *domain,
-				   u64 addr, unsigned long npages)
+static void domain_flush_iotlb_psi(struct dmar_domain *domain, u64 addr,
+				   unsigned long npages, u32 *error_code)
 {
 	struct iommu_domain_info *info;
 	unsigned long i;
 
-	xa_for_each(&domain->iommu_array, i, info)
-		iommu_flush_iotlb_psi(info->iommu, domain,
-				      addr >> VTD_PAGE_SHIFT, npages, 1, 0);
+	xa_for_each(&domain->iommu_array, i, info) {
+		nested_flush_pasid_iotlb(info->iommu, domain,
+					 addr >> VTD_PAGE_SHIFT, npages,
+					 0, error_code);
+
+		if (domain->has_iotlb_device)
+			continue;
+
+		nested_flush_dev_iotlb(domain, addr,
+				       ilog2(__roundup_pow_of_two(npages)),
+				       error_code);
+	}
 }
 
 static int intel_nested_cache_invalidate_user(struct iommu_domain *domain,
@@ -169,8 +178,8 @@ static int intel_nested_cache_invalidate_user(struct iommu_domain *domain,
 		if (inv_info.addr == 0 && inv_info.npages == U64_MAX)
 			intel_nested_flush_iotlb_all(domain, &error_code);
 		else
-			domain_flush_iotlb_psi(dmar_domain,
-					       inv_info.addr, inv_info.npages);
+			domain_flush_iotlb_psi(dmar_domain, inv_info.addr,
+					       inv_info.npages, &error_code);
 	}
 
 	array->entry_num = index;
