@@ -73,6 +73,58 @@ static void intel_nested_domain_free(struct iommu_domain *domain)
 	kfree(to_dmar_domain(domain));
 }
 
+static void nested_flush_pasid_iotlb(struct intel_iommu *iommu,
+				     struct dmar_domain *domain, u64 addr,
+				     unsigned long npages, bool ih,
+				     u32 *error_code)
+{
+	u16 did = domain_id_iommu(domain, iommu);
+	unsigned long flags;
+
+	spin_lock_irqsave(&domain->lock, flags);
+	if (!list_empty(&domain->devices))
+		qi_flush_piotlb(iommu, did, IOMMU_NO_PASID, addr,
+				npages, ih, error_code);
+	spin_unlock_irqrestore(&domain->lock, flags);
+}
+
+static void nested_flush_dev_iotlb(struct dmar_domain *domain, u64 addr,
+				  unsigned mask, u32 *error_code)
+{
+	struct device_domain_info *info;
+	unsigned long flags;
+	u16 sid, qdep;
+
+	spin_lock_irqsave(&domain->lock, flags);
+	list_for_each_entry(info, &domain->devices, link) {
+		if (!info->ats_enabled)
+			continue;
+		sid = info->bus << 8 | info->devfn;
+		qdep = info->ats_qdep;
+		qi_flush_dev_iotlb(info->iommu, sid, info->pfsid,
+				   qdep, addr, mask, error_code);
+		quirk_extra_dev_tlb_flush(info, addr, mask, IOMMU_NO_PASID, qdep);
+	}
+	spin_unlock_irqrestore(&domain->lock, flags);
+}
+
+static void intel_nested_flush_iotlb_all(struct iommu_domain *domain,
+					 u32 *error_code)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct iommu_domain_info *info;
+	unsigned long idx;
+
+	xa_for_each(&dmar_domain->iommu_array, idx, info) {
+		nested_flush_pasid_iotlb(info->iommu, dmar_domain, 0, -1, 0, error_code);
+
+		if (!dmar_domain->has_iotlb_device)
+			continue;
+
+		nested_flush_dev_iotlb(dmar_domain, 0, 64 - VTD_PAGE_SHIFT, error_code);
+	}
+}
+
 static void domain_flush_iotlb_psi(struct dmar_domain *domain,
 				   u64 addr, unsigned long npages)
 {
@@ -115,7 +167,7 @@ static int intel_nested_cache_invalidate_user(struct iommu_domain *domain,
 		}
 
 		if (inv_info.addr == 0 && inv_info.npages == U64_MAX)
-			intel_flush_iotlb_all(domain);
+			intel_nested_flush_iotlb_all(domain, &error_code);
 		else
 			domain_flush_iotlb_psi(dmar_domain,
 					       inv_info.addr, inv_info.npages);
