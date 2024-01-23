@@ -3908,8 +3908,11 @@ intel_iommu_domain_alloc_user(struct device *dev, u32 flags,
 	if (!domain)
 		return ERR_PTR(-ENOMEM);
 
-	if (nested_parent)
+	if (nested_parent) {
 		to_dmar_domain(domain)->nested_parent = true;
+		INIT_LIST_HEAD(&to_dmar_domain(domain)->s1_domains);
+		spin_lock_init(&to_dmar_domain(domain)->s1_lock);
+	}
 
 	if (dirty_tracking) {
 		if (to_dmar_domain(domain)->use_first_level) {
@@ -3924,6 +3927,8 @@ intel_iommu_domain_alloc_user(struct device *dev, u32 flags,
 
 static void intel_iommu_domain_free(struct iommu_domain *domain)
 {
+	WARN_ON(to_dmar_domain(domain)->nested_parent &&
+		!list_empty(&to_dmar_domain(domain)->s1_domains));
 	if (domain != &si_domain->domain)
 		domain_exit(to_dmar_domain(domain));
 }

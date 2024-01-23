@@ -627,6 +627,10 @@ struct dmar_domain {
 			int		agaw;
 			/* maximum mapped address */
 			u64		max_addr;
+			spinlock_t	s1_lock;	/* Protect stage-1
+							   tracking lists */
+			struct list_head s1_domains;	/* all stage-1
+							   domains */
 		};
 
 		/* Nested user domain */
@@ -637,6 +641,8 @@ struct dmar_domain {
 			unsigned long s1_pgtbl;
 			/* page table attributes */
 			struct iommu_hwpt_vtd_s1 s1_cfg;
+			struct list_head s2_link; /* link to parent domain
+						     siblings */
 		};
 	};
 

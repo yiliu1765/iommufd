@@ -70,6 +70,13 @@ static int intel_nested_attach_dev(struct iommu_domain *domain,
 
 static void intel_nested_domain_free(struct iommu_domain *domain)
 {
+	struct dmar_domain *s1_domain = to_dmar_domain(domain);
+	struct dmar_domain *s2_domain = s1_domain->s2_domain;
+	unsigned long flags;
+
+	spin_lock_irqsave(&s2_domain->s1_lock, flags);
+	list_del(&s1_domain->s2_link);
+	spin_unlock_irqrestore(&s2_domain->s1_lock, flags);
 	kfree(to_dmar_domain(domain));
 }
 
@@ -172,6 +179,7 @@ struct iommu_domain *intel_nested_domain_alloc(struct iommu_domain *parent,
 	struct dmar_domain *s2_domain = to_dmar_domain(parent);
 	struct iommu_hwpt_vtd_s1 vtd;
 	struct dmar_domain *domain;
+	unsigned long flags;
 	int ret;
 
 	/* Must be nested domain */
@@ -200,6 +208,10 @@ struct iommu_domain *intel_nested_domain_alloc(struct iommu_domain *parent,
 	INIT_LIST_HEAD(&domain->dev_pasids);
 	spin_lock_init(&domain->lock);
 	xa_init(&domain->iommu_array);
+
+	spin_lock_irqsave(&s2_domain->s1_lock, flags);
+	list_add(&domain->s2_link, &s2_domain->s1_domains);
+	spin_unlock_irqrestore(&s2_domain->s1_lock, flags);
 
 	return &domain->domain;
 }
