@@ -4763,6 +4763,33 @@ __device_set_dirty_tracking(struct list_head *devices, bool enable)
 	return ret;
 }
 
+static int
+__parent_domain_set_dirty_tracking(struct dmar_domain *domain,
+				   bool enable)
+{
+	struct dmar_domain *s1_domain;
+	unsigned long flags;
+	int ret;
+
+	lockdep_assert_held(&domain->lock);
+
+	spin_lock_irqsave(&domain->s1_lock, flags);
+	list_for_each_entry(s1_domain, &domain->s1_domains, s2_link) {
+		ret = __device_set_dirty_tracking(&s1_domain->devices, enable);
+		if (ret)
+			goto err_unwind;
+	}
+	spin_unlock_irqrestore(&domain->s1_lock, flags);
+	return 0;
+
+err_unwind:
+	list_for_each_entry(s1_domain, &domain->s1_domains, s2_link)
+		__device_set_dirty_tracking(&s1_domain->devices,
+					    domain->dirty_tracking);
+	spin_unlock_irqrestore(&domain->s1_lock, flags);
+	return ret;
+}
+
 static int intel_iommu_set_dirty_tracking(struct iommu_domain *domain,
 					  bool enable)
 {
@@ -4776,6 +4803,12 @@ static int intel_iommu_set_dirty_tracking(struct iommu_domain *domain,
 	ret = __device_set_dirty_tracking(&dmar_domain->devices, enable);
 	if (ret)
 		goto err_unwind;
+
+	if (dmar_domain->nested_parent) {
+		ret = __parent_domain_set_dirty_tracking(dmar_domain, enable);
+		if (ret)
+			goto err_unwind;
+	}
 
 	dmar_domain->dirty_tracking = enable;
 out_unlock:
