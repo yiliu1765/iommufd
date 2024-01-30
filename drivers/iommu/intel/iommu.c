@@ -1322,8 +1322,8 @@ static void __iommu_flush_dev_iotlb(struct device_domain_info *info,
 	quirk_extra_dev_tlb_flush(info, addr, mask, IOMMU_NO_PASID, qdep);
 }
 
-static void iommu_flush_dev_iotlb(struct dmar_domain *domain,
-				  u64 addr, unsigned mask)
+static void domain_flush_dev_iotlb(struct dmar_domain *domain,
+				   u64 addr, unsigned mask)
 {
 	struct dev_pasid_info *dev_pasid;
 	struct device_domain_info *info;
@@ -1420,13 +1420,6 @@ static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 			iommu->flush.flush_iotlb(iommu, did, addr | ih, mask,
 							DMA_TLB_PSI_FLUSH);
 	}
-
-	/*
-	 * It possible that this helper is called for map case. So need to
-	 * check if it unmap or not. If not, just skip device IOTLB invalidation.
-	 */
-	if (!map)
-		iommu_flush_dev_iotlb(domain, addr, mask);
 }
 
 /* Notification for newly created mappings */
@@ -1458,10 +1451,8 @@ static void intel_flush_iotlb_all(struct iommu_domain *domain)
 		else
 			iommu->flush.flush_iotlb(iommu, did, 0, 0,
 						 DMA_TLB_DSI_FLUSH);
-
-		if (!cap_caching_mode(iommu->cap))
-			iommu_flush_dev_iotlb(dmar_domain, 0, MAX_AGAW_PFN_WIDTH);
 	}
+	domain_flush_dev_iotlb(dmar_domain, 0, MAX_AGAW_PFN_WIDTH);
 }
 
 static void iommu_disable_protect_mem_regions(struct intel_iommu *iommu)
@@ -1985,6 +1976,8 @@ static void switch_to_super_page(struct dmar_domain *domain,
 				iommu_flush_iotlb_psi(info->iommu, domain,
 						      start_pfn, lvl_pages,
 						      0, 0);
+			domain_flush_dev_iotlb(domain, start_pfn << VTD_PAGE_SHIFT,
+					       ilog2(__roundup_pow_of_two(lvl_pages)));
 		}
 
 		pte++;
@@ -3385,6 +3378,8 @@ static int intel_iommu_memory_notifier(struct notifier_block *nb,
 					start_vpfn, mhp->nr_pages,
 					list_empty(&freelist), 0);
 			rcu_read_unlock();
+			domain_flush_dev_iotlb(si_domain, start_vpfn << VTD_PAGE_SHIFT,
+					       ilog2(__roundup_pow_of_two(mhp->nr_pages)));
 			put_pages_list(&freelist);
 		}
 		break;
@@ -4106,7 +4101,8 @@ static void intel_iommu_tlb_sync(struct iommu_domain *domain,
 		iommu_flush_iotlb_psi(info->iommu, dmar_domain,
 				      start_pfn, nrpages,
 				      list_empty(&gather->freelist), 0);
-
+	domain_flush_dev_iotlb(dmar_domain, start_pfn << VTD_PAGE_SHIFT,
+			       ilog2(__roundup_pow_of_two(nrpages)));
 	put_pages_list(&gather->freelist);
 }
 
