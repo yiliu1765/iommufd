@@ -1502,10 +1502,10 @@ static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 		__iommu_flush_iotlb_psi(iommu, did, pfn, pages, ih);
 
 	/*
-	 * In caching mode, changes of pages from non-present to present require
-	 * flush. However, device IOTLB doesn't need to be flushed in this case.
+	 * It possible that this helper is called for map case. So need to
+	 * check if it unmap or not. If not, just skip device IOTLB invalidation.
 	 */
-	if (!cap_caching_mode(iommu->cap) || !map)
+	if (!map)
 		iommu_flush_dev_iotlb(domain, addr, mask);
 }
 
