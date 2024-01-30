@@ -1394,8 +1394,8 @@ static void __iommu_flush_dev_iotlb(struct device_domain_info *info,
 	quirk_extra_dev_tlb_flush(info, addr, mask, IOMMU_NO_PASID, qdep);
 }
 
-static void iommu_flush_dev_iotlb(struct dmar_domain *domain,
-				  u64 addr, unsigned mask)
+static void domain_flush_dev_iotlb(struct dmar_domain *domain,
+				   u64 addr, unsigned mask)
 {
 	struct dev_pasid_info *dev_pasid;
 	struct device_domain_info *info;
@@ -1485,8 +1485,6 @@ static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 				  unsigned long pfn, unsigned int pages,
 				  int ih, int map)
 {
-	unsigned int aligned_pages = __roundup_pow_of_two(pages);
-	unsigned int mask = ilog2(aligned_pages);
 	uint64_t addr = (uint64_t)pfn << VTD_PAGE_SHIFT;
 	u16 did = domain_id_iommu(domain, iommu);
 
@@ -1500,13 +1498,6 @@ static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 		domain_flush_pasid_iotlb(iommu, domain, addr, pages, ih);
 	else
 		__iommu_flush_iotlb_psi(iommu, did, pfn, pages, ih);
-
-	/*
-	 * It possible that this helper is called for map case. So need to
-	 * check if it unmap or not. If not, just skip device IOTLB invalidation.
-	 */
-	if (!map)
-		iommu_flush_dev_iotlb(domain, addr, mask);
 }
 
 /* Notification for newly created mappings */
@@ -1578,10 +1569,8 @@ static void intel_flush_iotlb_all(struct iommu_domain *domain)
 		else
 			iommu->flush.flush_iotlb(iommu, did, 0, 0,
 						 DMA_TLB_DSI_FLUSH);
-
-		if (!cap_caching_mode(iommu->cap))
-			iommu_flush_dev_iotlb(dmar_domain, 0, MAX_AGAW_PFN_WIDTH);
 	}
+	domain_flush_dev_iotlb(dmar_domain, 0, MAX_AGAW_PFN_WIDTH);
 
 	if (dmar_domain->nested_parent)
 		parent_domain_flush(dmar_domain, 0, -1, 0);
@@ -2108,6 +2097,8 @@ static void switch_to_super_page(struct dmar_domain *domain,
 				iommu_flush_iotlb_psi(info->iommu, domain,
 						      start_pfn, lvl_pages,
 						      0, 0);
+			domain_flush_dev_iotlb(domain, start_pfn << VTD_PAGE_SHIFT,
+					       ilog2(__roundup_pow_of_two(lvl_pages)));
 			if (domain->nested_parent)
 				parent_domain_flush(domain, start_pfn,
 						    lvl_pages, 0);
@@ -3507,6 +3498,8 @@ static int intel_iommu_memory_notifier(struct notifier_block *nb,
 					start_vpfn, mhp->nr_pages,
 					list_empty(&freelist), 0);
 			rcu_read_unlock();
+			domain_flush_dev_iotlb(si_domain, start_vpfn << VTD_PAGE_SHIFT,
+					       ilog2(__roundup_pow_of_two(mhp->nr_pages)));
 			put_pages_list(&freelist);
 		}
 		break;
@@ -4239,6 +4232,8 @@ static void intel_iommu_tlb_sync(struct iommu_domain *domain,
 				      start_pfn, nrpages,
 				      list_empty(&gather->freelist), 0);
 
+	domain_flush_dev_iotlb(dmar_domain, start_pfn << VTD_PAGE_SHIFT,
+			       ilog2(__roundup_pow_of_two(nrpages)));
 	if (dmar_domain->nested_parent)
 		parent_domain_flush(dmar_domain, start_pfn, nrpages,
 				    list_empty(&gather->freelist));
