@@ -1066,6 +1066,8 @@ void device_block_translation(struct device *dev);
 int prepare_domain_attach_device(struct iommu_domain *domain,
 				 struct device *dev);
 void domain_update_iommu_cap(struct dmar_domain *domain);
+void domain_flush_caches(struct dmar_domain *domain, u64 addr,
+			 unsigned long pages, int ih);
 
 int dmar_ir_support(void);
 
