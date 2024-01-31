@@ -1351,21 +1351,43 @@ static void domain_flush_dev_iotlb(struct dmar_domain *domain,
 	spin_unlock_irqrestore(&domain->lock, flags);
 }
 
-static void domain_flush_pasid_iotlb(struct intel_iommu *iommu,
-				     struct dmar_domain *domain, u64 addr,
+/* This flushes piotlb for a domain */
+static void domain_flush_pasid_iotlb(struct dmar_domain *domain, u64 addr,
 				     unsigned long npages, bool ih)
 {
-	u16 did = domain_id_iommu(domain, iommu);
 	struct dev_pasid_info *dev_pasid;
-	unsigned long flags;
+	struct iommu_domain_info *info;
+	unsigned long flags, idx;
 
 	spin_lock_irqsave(&domain->lock, flags);
-	list_for_each_entry(dev_pasid, &domain->dev_pasids, link_domain)
-		qi_flush_piotlb(iommu, did, dev_pasid->pasid, addr, npages, ih);
+	list_for_each_entry(dev_pasid, &domain->dev_pasids, link_domain) {
+		struct device_domain_info *info =
+					dev_iommu_priv_get(dev_pasid->dev);
 
-	if (!list_empty(&domain->devices))
-		qi_flush_piotlb(iommu, did, IOMMU_NO_PASID, addr, npages, ih);
+		qi_flush_piotlb(info->iommu,
+				domain_id_iommu(domain, info->iommu),
+				dev_pasid->pasid, addr, npages, ih);
+	}
+
 	spin_unlock_irqrestore(&domain->lock, flags);
+
+	/*
+	 * TODO: An iommu can be added to iommu_array per set_dev_pasid() or
+	 * a normal attach_device(), or both. If the iommu is attached only
+	 * in set_dev_pasid(), it is not necessary to flush piotlb with
+	 * IOMMU_NO_PASID. To avoid such unnecessary flush, may need to have
+	 * a no_pasid_users count in struct iommu_domain_info to track the
+	 * number of normal attach_device(). Check the no_pasid_users count
+	 * before flushing piotlb with IOMMU_NO_PASID. However, there is no
+	 * lock protecting the struct iommu_domain_info, will need to add it
+	 * later when there is a clear agreement on the iommu_domain_info
+	 * protection. Anyhow, this is an optimization. No harm to the
+	 * functionality.
+	 */
+	xa_for_each(&domain->iommu_array, idx, info)
+		qi_flush_piotlb(info->iommu,
+				domain_id_iommu(domain, info->iommu),
+				IOMMU_NO_PASID, addr, npages, ih);
 }
 
 static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
@@ -1376,6 +1398,7 @@ static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 	unsigned int aligned_pages = __roundup_pow_of_two(pages);
 	unsigned int mask = ilog2(aligned_pages);
 	uint64_t addr = (uint64_t)pfn << VTD_PAGE_SHIFT;
+	unsigned long bitmask = aligned_pages - 1;
 	u16 did = domain_id_iommu(domain, iommu);
 
 	if (WARN_ON(!pages))
@@ -1384,42 +1407,36 @@ static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 	if (ih)
 		ih = 1 << 6;
 
-	if (domain->use_first_level) {
-		domain_flush_pasid_iotlb(iommu, domain, addr, pages, ih);
-	} else {
-		unsigned long bitmask = aligned_pages - 1;
+	/*
+	 * PSI masks the low order bits of the base address. If the
+	 * address isn't aligned to the mask, then compute a mask value
+	 * needed to ensure the target range is flushed.
+	 */
+	if (unlikely(bitmask & pfn)) {
+		unsigned long end_pfn = pfn + pages - 1, shared_bits;
 
 		/*
-		 * PSI masks the low order bits of the base address. If the
-		 * address isn't aligned to the mask, then compute a mask value
-		 * needed to ensure the target range is flushed.
+		 * Since end_pfn <= pfn + bitmask, the only way bits
+		 * higher than bitmask can differ in pfn and end_pfn is
+		 * by carrying. This means after masking out bitmask,
+		 * high bits starting with the first set bit in
+		 * shared_bits are all equal in both pfn and end_pfn.
 		 */
-		if (unlikely(bitmask & pfn)) {
-			unsigned long end_pfn = pfn + pages - 1, shared_bits;
-
-			/*
-			 * Since end_pfn <= pfn + bitmask, the only way bits
-			 * higher than bitmask can differ in pfn and end_pfn is
-			 * by carrying. This means after masking out bitmask,
-			 * high bits starting with the first set bit in
-			 * shared_bits are all equal in both pfn and end_pfn.
-			 */
-			shared_bits = ~(pfn ^ end_pfn) & ~bitmask;
-			mask = shared_bits ? __ffs(shared_bits) : BITS_PER_LONG;
-		}
-
-		/*
-		 * Fallback to domain selective flush if no PSI support or
-		 * the size is too big.
-		 */
-		if (!cap_pgsel_inv(iommu->cap) ||
-		    mask > cap_max_amask_val(iommu->cap))
-			iommu->flush.flush_iotlb(iommu, did, 0, 0,
-							DMA_TLB_DSI_FLUSH);
-		else
-			iommu->flush.flush_iotlb(iommu, did, addr | ih, mask,
-							DMA_TLB_PSI_FLUSH);
+		shared_bits = ~(pfn ^ end_pfn) & ~bitmask;
+		mask = shared_bits ? __ffs(shared_bits) : BITS_PER_LONG;
 	}
+
+	/*
+	 * Fallback to domain selective flush if no PSI support or
+	 * the size is too big.
+	 */
+	if (!cap_pgsel_inv(iommu->cap) ||
+	    mask > cap_max_amask_val(iommu->cap))
+		iommu->flush.flush_iotlb(iommu, did, 0, 0,
+					 DMA_TLB_DSI_FLUSH);
+	else
+		iommu->flush.flush_iotlb(iommu, did, addr | ih, mask,
+					 DMA_TLB_PSI_FLUSH);
 }
 
 /* Notification for newly created mappings */
@@ -1439,18 +1456,18 @@ static void __mapping_notify_one(struct intel_iommu *iommu, struct dmar_domain *
 static void intel_flush_iotlb_all(struct iommu_domain *domain)
 {
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
-	struct iommu_domain_info *info;
-	unsigned long idx;
 
-	xa_for_each(&dmar_domain->iommu_array, idx, info) {
-		struct intel_iommu *iommu = info->iommu;
+	if (dmar_domain->use_first_level) {
+		domain_flush_pasid_iotlb(dmar_domain, 0, -1, 0);
+	} else {
+		struct iommu_domain_info *info;
+		unsigned long idx;
 
-		if (dmar_domain->use_first_level)
-			domain_flush_pasid_iotlb(iommu, dmar_domain, 0, -1, 0);
-		else
+		xa_for_each(&dmar_domain->iommu_array, idx, info)
 			iommu_flush_iotlb_psi(info->iommu, dmar_domain,
 					      0, -1, 0);
 	}
+
 	domain_flush_dev_iotlb(dmar_domain, 0, MAX_AGAW_PFN_WIDTH);
 }
 
@@ -1957,9 +1974,7 @@ static void switch_to_super_page(struct dmar_domain *domain,
 				 unsigned long end_pfn, int level)
 {
 	unsigned long lvl_pages = lvl_to_nr_pages(level);
-	struct iommu_domain_info *info;
 	struct dma_pte *pte = NULL;
-	unsigned long i;
 
 	while (start_pfn <= end_pfn) {
 		if (!pte)
@@ -1971,10 +1986,19 @@ static void switch_to_super_page(struct dmar_domain *domain,
 					       start_pfn + lvl_pages - 1,
 					       level + 1);
 
-			xa_for_each(&domain->iommu_array, i, info)
-				iommu_flush_iotlb_psi(info->iommu, domain,
-						      start_pfn, lvl_pages,
-						      0);
+			if (domain->use_first_level) {
+				domain_flush_pasid_iotlb(domain,
+							 start_pfn << VTD_PAGE_SHIFT,
+							 lvl_pages, 0);
+			} else {
+				struct iommu_domain_info *info;
+				unsigned long i;
+
+				xa_for_each(&domain->iommu_array, i, info)
+					iommu_flush_iotlb_psi(info->iommu, domain,
+							      start_pfn, lvl_pages,
+							      0);
+			}
 			domain_flush_dev_iotlb(domain, start_pfn << VTD_PAGE_SHIFT,
 					       ilog2(__roundup_pow_of_two(lvl_pages)));
 		}
@@ -3365,16 +3389,24 @@ static int intel_iommu_memory_notifier(struct notifier_block *nb,
 	case MEM_OFFLINE:
 	case MEM_CANCEL_ONLINE:
 		{
-			struct iommu_domain_info *info;
 			LIST_HEAD(freelist);
-			unsigned long idx;
 
 			domain_unmap(si_domain, start_vpfn, last_vpfn, &freelist);
 
-			xa_for_each(&si_domain->iommu_array, idx, info)
-				iommu_flush_iotlb_psi(info->iommu, si_domain,
-					start_vpfn, mhp->nr_pages,
-					list_empty(&freelist));
+			if (si_domain->use_first_level) {
+				domain_flush_pasid_iotlb(si_domain,
+							 start_vpfn << VTD_PAGE_SHIFT,
+							 mhp->nr_pages,
+							 list_empty(&freelist));
+			} else {
+				struct iommu_domain_info *info;
+				unsigned long idx;
+
+				xa_for_each(&si_domain->iommu_array, idx, info)
+					iommu_flush_iotlb_psi(info->iommu, si_domain,
+						start_vpfn, mhp->nr_pages,
+						list_empty(&freelist));
+			}
 			domain_flush_dev_iotlb(si_domain, start_vpfn << VTD_PAGE_SHIFT,
 					       ilog2(__roundup_pow_of_two(mhp->nr_pages)));
 			put_pages_list(&freelist);
@@ -4086,18 +4118,27 @@ static void intel_iommu_tlb_sync(struct iommu_domain *domain,
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
 	unsigned long iova_pfn = IOVA_PFN(gather->start);
 	size_t size = gather->end - gather->start;
-	struct iommu_domain_info *info;
 	unsigned long start_pfn;
 	unsigned long nrpages;
-	unsigned long i;
 
 	nrpages = aligned_nrpages(gather->start, size);
 	start_pfn = mm_to_dma_pfn_start(iova_pfn);
 
-	xa_for_each(&dmar_domain->iommu_array, i, info)
-		iommu_flush_iotlb_psi(info->iommu, dmar_domain,
-				      start_pfn, nrpages,
-				      list_empty(&gather->freelist));
+	if (dmar_domain->use_first_level) {
+		domain_flush_pasid_iotlb(dmar_domain,
+					 start_pfn << VTD_PAGE_SHIFT,
+					 nrpages,
+					 list_empty(&gather->freelist));
+	} else {
+		struct iommu_domain_info *info;
+		unsigned long i;
+
+		xa_for_each(&dmar_domain->iommu_array, i, info)
+			iommu_flush_iotlb_psi(info->iommu, dmar_domain,
+					      start_pfn, nrpages,
+					      list_empty(&gather->freelist));
+	}
+
 	domain_flush_dev_iotlb(dmar_domain, start_pfn << VTD_PAGE_SHIFT,
 			       ilog2(__roundup_pow_of_two(nrpages)));
 	put_pages_list(&gather->freelist);
