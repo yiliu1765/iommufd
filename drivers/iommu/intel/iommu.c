@@ -1483,7 +1483,7 @@ static void __iommu_flush_iotlb_psi(struct intel_iommu *iommu, u16 did,
 static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 				  struct dmar_domain *domain,
 				  unsigned long pfn, unsigned int pages,
-				  int ih, int map)
+				  int ih)
 {
 	uint64_t addr = (uint64_t)pfn << VTD_PAGE_SHIFT;
 	u16 did = domain_id_iommu(domain, iommu);
@@ -1509,7 +1509,7 @@ static void __mapping_notify_one(struct intel_iommu *iommu, struct dmar_domain *
 	 * and second level.
 	 */
 	if (cap_caching_mode(iommu->cap) && !domain->use_first_level)
-		iommu_flush_iotlb_psi(iommu, domain, pfn, pages, 0, 1);
+		iommu_flush_iotlb_psi(iommu, domain, pfn, pages, 0);
 	else
 		iommu_flush_write_buffer(iommu);
 }
@@ -2096,7 +2096,7 @@ static void switch_to_super_page(struct dmar_domain *domain,
 			xa_for_each(&domain->iommu_array, i, info)
 				iommu_flush_iotlb_psi(info->iommu, domain,
 						      start_pfn, lvl_pages,
-						      0, 0);
+						      0);
 			domain_flush_dev_iotlb(domain, start_pfn << VTD_PAGE_SHIFT,
 					       ilog2(__roundup_pow_of_two(lvl_pages)));
 			if (domain->nested_parent)
@@ -3496,7 +3496,7 @@ static int intel_iommu_memory_notifier(struct notifier_block *nb,
 			for_each_active_iommu(iommu, drhd)
 				iommu_flush_iotlb_psi(iommu, si_domain,
 					start_vpfn, mhp->nr_pages,
-					list_empty(&freelist), 0);
+					list_empty(&freelist));
 			rcu_read_unlock();
 			domain_flush_dev_iotlb(si_domain, start_vpfn << VTD_PAGE_SHIFT,
 					       ilog2(__roundup_pow_of_two(mhp->nr_pages)));
@@ -4230,7 +4230,7 @@ static void intel_iommu_tlb_sync(struct iommu_domain *domain,
 	xa_for_each(&dmar_domain->iommu_array, i, info)
 		iommu_flush_iotlb_psi(info->iommu, dmar_domain,
 				      start_pfn, nrpages,
-				      list_empty(&gather->freelist), 0);
+				      list_empty(&gather->freelist));
 
 	domain_flush_dev_iotlb(dmar_domain, start_pfn << VTD_PAGE_SHIFT,
 			       ilog2(__roundup_pow_of_two(nrpages)));
