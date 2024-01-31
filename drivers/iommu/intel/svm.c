@@ -225,7 +225,7 @@ static void intel_flush_svm_all(struct intel_svm *svm)
 	list_for_each_entry_rcu(sdev, &svm->devs, list) {
 		info = dev_iommu_priv_get(sdev->dev);
 
-		qi_flush_piotlb(sdev->iommu, sdev->did, svm->pasid, 0, -1UL, 0);
+		qi_flush_piotlb(sdev->iommu, sdev->did, svm->pasid, 0, U64_MAX, 0);
 		if (info->ats_enabled) {
 			qi_flush_dev_iotlb_pasid(sdev->iommu, sdev->sid, info->pfsid,
 						 svm->pasid, sdev->qdep,
@@ -244,7 +244,7 @@ static void intel_arch_invalidate_secondary_tlbs(struct mmu_notifier *mn,
 {
 	struct intel_svm *svm = container_of(mn, struct intel_svm, notifier);
 
-	if (start == 0 && end == -1UL) {
+	if (start == 0 && end == U64_MAX) {
 		intel_flush_svm_all(svm);
 		return;
 	}

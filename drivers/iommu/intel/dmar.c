@@ -1555,7 +1555,7 @@ void qi_flush_piotlb(struct intel_iommu *iommu, u16 did, u32 pasid, u64 addr,
 	struct qi_desc desc = {.qw2 = 0, .qw3 = 0};
 
 	/*
-	 * npages == -1 means a PASID-selective invalidation, otherwise,
+	 * npages == U64_MAX means a PASID-selective invalidation, otherwise,
 	 * a positive value for Page-selective-within-PASID invalidation.
 	 * 0 is not a valid input.
 	 */
@@ -1564,7 +1564,7 @@ void qi_flush_piotlb(struct intel_iommu *iommu, u16 did, u32 pasid, u64 addr,
 		return;
 	}
 
-	if (npages == -1) {
+	if (npages == U64_MAX) {
 		desc.qw0 = QI_EIOTLB_PASID(pasid) |
 				QI_EIOTLB_DID(did) |
 				QI_EIOTLB_GRAN(QI_GRAN_NONG_PASID) |
