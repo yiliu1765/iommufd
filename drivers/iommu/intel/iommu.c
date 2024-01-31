@@ -1438,6 +1438,36 @@ static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 					 DMA_TLB_PSI_FLUSH);
 }
 
+/*
+ * For a domain, when there is modification, needs to flush iotlb or piotlb
+ * and devTLB. Today, domain tracks attached devices, pasids and iommus. To
+ * invalidate iotlb, should loop all the attched iommus; To invalidate piotlb
+ * loops all the attached iommus, and also loop iommus to invalidate piotlb
+ * with RID_PASID (a.k.a. IOMMU_NO_PASID); To invalidate devTLB, loop all the
+ * attached devices and pasids.
+ */
+void domain_flush_caches(struct dmar_domain *domain, unsigned long pfn,
+			 unsigned long pages, int ih)
+{
+	struct iommu_domain_info *info;
+	unsigned long idx;
+	unsigned int mask;
+
+	if (domain->use_first_level)
+		domain_flush_pasid_iotlb(domain, pfn << VTD_PAGE_SHIFT,
+					 pages, ih);
+	else
+		xa_for_each(&domain->iommu_array, idx, info)
+			iommu_flush_iotlb_psi(info->iommu, domain,
+					      pfn, pages, ih);
+	if (pages == U64_MAX)
+		mask = MAX_AGAW_PFN_WIDTH;
+	else
+		mask = ilog2(__roundup_pow_of_two(pages));
+
+	domain_flush_dev_iotlb(domain, pfn << VTD_PAGE_SHIFT, mask);
+}
+
 /* Notification for newly created mappings */
 static void __mapping_notify_one(struct intel_iommu *iommu, struct dmar_domain *domain,
 				 unsigned long pfn, unsigned int pages)
@@ -1454,18 +1484,7 @@ static void __mapping_notify_one(struct intel_iommu *iommu, struct dmar_domain *
 
 static void intel_flush_iotlb_all(struct iommu_domain *domain)
 {
-	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
-	struct iommu_domain_info *info;
-	unsigned long idx;
-
-	if (dmar_domain->use_first_level)
-		domain_flush_pasid_iotlb(dmar_domain, 0, U64_MAX, 0);
-	else
-		xa_for_each(&dmar_domain->iommu_array, idx, info)
-			iommu_flush_iotlb_psi(info->iommu, dmar_domain,
-					      0, U64_MAX, 0);
-
-	domain_flush_dev_iotlb(dmar_domain, 0, MAX_AGAW_PFN_WIDTH);
+	domain_flush_caches(to_dmar_domain(domain), 0, U64_MAX, 0);
 }
 
 static void iommu_disable_protect_mem_regions(struct intel_iommu *iommu)
@@ -1971,9 +1990,7 @@ static void switch_to_super_page(struct dmar_domain *domain,
 				 unsigned long end_pfn, int level)
 {
 	unsigned long lvl_pages = lvl_to_nr_pages(level);
-	struct iommu_domain_info *info;
 	struct dma_pte *pte = NULL;
-	unsigned long i;
 
 	while (start_pfn <= end_pfn) {
 		if (!pte)
@@ -1985,17 +2002,7 @@ static void switch_to_super_page(struct dmar_domain *domain,
 					       start_pfn + lvl_pages - 1,
 					       level + 1);
 
-			if (domain->use_first_level)
-				domain_flush_pasid_iotlb(domain,
-							 start_pfn << VTD_PAGE_SHIFT,
-							 lvl_pages, 0);
-			else
-				xa_for_each(&domain->iommu_array, i, info)
-					iommu_flush_iotlb_psi(info->iommu, domain,
-							      start_pfn, lvl_pages,
-							      0);
-			domain_flush_dev_iotlb(domain, start_pfn << VTD_PAGE_SHIFT,
-					       ilog2(__roundup_pow_of_two(lvl_pages)));
+			domain_flush_caches(domain, start_pfn, lvl_pages, 0);
 		}
 
 		pte++;
@@ -3389,23 +3396,10 @@ static int intel_iommu_memory_notifier(struct notifier_block *nb,
 			LIST_HEAD(freelist);
 
 			domain_unmap(si_domain, start_vpfn, last_vpfn, &freelist);
+			/*TODO: check why original code needs to loop all iommus in the system */
+			domain_flush_caches(si_domain, start_vpfn, mhp->nr_pages,
+					    list_empty(&freelist));
 
-			if (si_domain->use_first_level) {
-				domain_flush_pasid_iotlb(si_domain,
-							 start_vpfn << VTD_PAGE_SHIFT,
-							 mhp->nr_pages,
-							 list_empty(&freelist));
-			} else {
-				rcu_read_lock();
-				for_each_active_iommu(iommu, drhd)
-					iommu_flush_iotlb_psi(iommu, si_domain,
-							      start_vpfn,
-							      mhp->nr_pages,
-							      list_empty(&freelist));
-				rcu_read_unlock();
-			}
-			domain_flush_dev_iotlb(si_domain, start_vpfn << VTD_PAGE_SHIFT,
-					       ilog2(__roundup_pow_of_two(mhp->nr_pages)));
 			put_pages_list(&freelist);
 		}
 		break;
@@ -4115,27 +4109,15 @@ static void intel_iommu_tlb_sync(struct iommu_domain *domain,
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
 	unsigned long iova_pfn = IOVA_PFN(gather->start);
 	size_t size = gather->end - gather->start;
-	struct iommu_domain_info *info;
 	unsigned long start_pfn;
 	unsigned long nrpages;
-	unsigned long i;
 
 	nrpages = aligned_nrpages(gather->start, size);
 	start_pfn = mm_to_dma_pfn_start(iova_pfn);
 
-	if (dmar_domain->use_first_level)
-		domain_flush_pasid_iotlb(dmar_domain,
-					 start_pfn << VTD_PAGE_SHIFT,
-					 nrpages,
-					 list_empty(&gather->freelist));
-	else
-		xa_for_each(&dmar_domain->iommu_array, i, info)
-			iommu_flush_iotlb_psi(info->iommu, dmar_domain,
-					      start_pfn, nrpages,
-					      list_empty(&gather->freelist));
+	domain_flush_caches(dmar_domain, start_pfn, nrpages,
+			    list_empty(&gather->freelist));
 
-	domain_flush_dev_iotlb(dmar_domain, start_pfn << VTD_PAGE_SHIFT,
-			       ilog2(__roundup_pow_of_two(nrpages)));
 	put_pages_list(&gather->freelist);
 }
 
