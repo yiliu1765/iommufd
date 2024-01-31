@@ -1370,7 +1370,7 @@ static void domain_flush_pasid_iotlb(struct intel_iommu *iommu,
 
 static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 				  struct dmar_domain *domain,
-				  unsigned long pfn, unsigned int pages,
+				  unsigned long pfn, unsigned long int pages,
 				  int ih)
 {
 	unsigned int aligned_pages = __roundup_pow_of_two(pages);
