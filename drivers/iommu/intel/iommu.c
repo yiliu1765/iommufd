@@ -1444,13 +1444,12 @@ static void intel_flush_iotlb_all(struct iommu_domain *domain)
 
 	xa_for_each(&dmar_domain->iommu_array, idx, info) {
 		struct intel_iommu *iommu = info->iommu;
-		u16 did = domain_id_iommu(dmar_domain, iommu);
 
 		if (dmar_domain->use_first_level)
 			domain_flush_pasid_iotlb(iommu, dmar_domain, 0, U64_MAX, 0);
 		else
-			iommu->flush.flush_iotlb(iommu, did, 0, 0,
-						 DMA_TLB_DSI_FLUSH);
+			iommu_flush_iotlb_psi(info->iommu, dmar_domain,
+					      0, U64_MAX, 0);
 	}
 	domain_flush_dev_iotlb(dmar_domain, 0, MAX_AGAW_PFN_WIDTH);
 }
