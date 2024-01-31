@@ -1441,7 +1441,7 @@ static void domain_flush_pasid_iotlb(struct intel_iommu *iommu,
 }
 
 static void __iommu_flush_iotlb_psi(struct intel_iommu *iommu, u16 did,
-				    unsigned long pfn, unsigned int pages,
+				    unsigned long pfn, unsigned long pages,
 				    int ih)
 {
 	unsigned int aligned_pages = __roundup_pow_of_two(pages);
@@ -1482,7 +1482,7 @@ static void __iommu_flush_iotlb_psi(struct intel_iommu *iommu, u16 did,
 
 static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 				  struct dmar_domain *domain,
-				  unsigned long pfn, unsigned int pages,
+				  unsigned long pfn, unsigned long pages,
 				  int ih)
 {
 	uint64_t addr = (uint64_t)pfn << VTD_PAGE_SHIFT;
@@ -1502,7 +1502,7 @@ static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 
 /* Notification for newly created mappings */
 static void __mapping_notify_one(struct intel_iommu *iommu, struct dmar_domain *domain,
-				 unsigned long pfn, unsigned int pages)
+				 unsigned long pfn, unsigned long pages)
 {
 	/*
 	 * It's a non-present to present mapping. Only flush if caching mode
