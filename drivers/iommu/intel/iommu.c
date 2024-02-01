@@ -3365,18 +3365,16 @@ static int intel_iommu_memory_notifier(struct notifier_block *nb,
 	case MEM_OFFLINE:
 	case MEM_CANCEL_ONLINE:
 		{
-			struct dmar_drhd_unit *drhd;
-			struct intel_iommu *iommu;
+			struct iommu_domain_info *info;
 			LIST_HEAD(freelist);
+			unsigned long idx;
 
 			domain_unmap(si_domain, start_vpfn, last_vpfn, &freelist);
 
-			rcu_read_lock();
-			for_each_active_iommu(iommu, drhd)
-				iommu_flush_iotlb_psi(iommu, si_domain,
+			xa_for_each(&si_domain->iommu_array, idx, info)
+				iommu_flush_iotlb_psi(info->iommu, si_domain,
 					start_vpfn, mhp->nr_pages,
 					list_empty(&freelist));
-			rcu_read_unlock();
 			domain_flush_dev_iotlb(si_domain, start_vpfn << VTD_PAGE_SHIFT,
 					       ilog2(__roundup_pow_of_two(mhp->nr_pages)));
 			put_pages_list(&freelist);
