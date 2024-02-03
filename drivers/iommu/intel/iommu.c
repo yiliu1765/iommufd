@@ -4746,24 +4746,36 @@ static void *intel_iommu_hw_info(struct device *dev, u32 *length, u32 *type)
 	return vtd;
 }
 
+static int
+__device_set_dirty_tracking(struct list_head *devices, bool enable)
+{
+	struct device_domain_info *info;
+	int ret = 0;
+
+	list_for_each_entry(info, devices, link) {
+		ret = intel_pasid_setup_dirty_tracking(info->iommu,
+						       info->domain, info->dev,
+						       IOMMU_NO_PASID, enable);
+		if (ret)
+			break;
+	}
+
+	return ret;
+}
+
 static int intel_iommu_set_dirty_tracking(struct iommu_domain *domain,
 					  bool enable)
 {
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
-	struct device_domain_info *info;
 	int ret;
 
 	spin_lock(&dmar_domain->lock);
 	if (dmar_domain->dirty_tracking == enable)
 		goto out_unlock;
 
-	list_for_each_entry(info, &dmar_domain->devices, link) {
-		ret = intel_pasid_setup_dirty_tracking(info->iommu,
-						       info->domain, info->dev,
-						       IOMMU_NO_PASID, enable);
-		if (ret)
-			goto err_unwind;
-	}
+	ret = __device_set_dirty_tracking(&dmar_domain->devices, enable);
+	if (ret)
+		goto err_unwind;
 
 	dmar_domain->dirty_tracking = enable;
 out_unlock:
@@ -4772,10 +4784,8 @@ out_unlock:
 	return 0;
 
 err_unwind:
-	list_for_each_entry(info, &dmar_domain->devices, link)
-		intel_pasid_setup_dirty_tracking(info->iommu, dmar_domain,
-						 info->dev, IOMMU_NO_PASID,
-						 dmar_domain->dirty_tracking);
+	__device_set_dirty_tracking(&dmar_domain->devices,
+				    dmar_domain->dirty_tracking);
 	spin_unlock(&dmar_domain->lock);
 	return ret;
 }
