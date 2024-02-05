@@ -18,6 +18,8 @@
 #include "iommu.h"
 #include "pasid.h"
 
+static DEFINE_IDA(domain_seq_ids);
+
 static int intel_nested_attach_dev(struct iommu_domain *domain,
 				   struct device *dev)
 {
@@ -70,6 +72,7 @@ static int intel_nested_attach_dev(struct iommu_domain *domain,
 
 static void intel_nested_domain_free(struct iommu_domain *domain)
 {
+	ida_free(&domain_seq_ids, to_dmar_domain(domain)->seq_id);
 	kfree(to_dmar_domain(domain));
 }
 
@@ -190,6 +193,14 @@ struct iommu_domain *intel_nested_domain_alloc(struct iommu_domain *parent,
 	if (!domain)
 		return ERR_PTR(-ENOMEM);
 
+	/* seq_id #0 is reserved */
+	domain->seq_id = ida_alloc_range(&domain_seq_ids, 1,
+					 S32_MAX, GFP_KERNEL);
+	if (domain->seq_id < 0) {
+		ret = domain->seq_id;
+		goto out_free_domain;
+	}
+
 	domain->use_first_level = true;
 	domain->s2_domain = s2_domain;
 	domain->s1_pgtbl = vtd.pgtbl_addr;
@@ -202,4 +213,8 @@ struct iommu_domain *intel_nested_domain_alloc(struct iommu_domain *parent,
 	xa_init(&domain->iommu_array);
 
 	return &domain->domain;
+
+out_free_domain:
+	kfree(domain);
+	return ERR_PTR(ret);
 }

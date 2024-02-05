@@ -631,6 +631,7 @@ struct dmar_domain {
 
 		/* Nested user domain */
 		struct {
+			int seq_id; /* sequence id of the domain */
 			/* parent page table which the user domain is nested on */
 			struct dmar_domain *s2_domain;
 			/* user page table pointer (in GPA) */
