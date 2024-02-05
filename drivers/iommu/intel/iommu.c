@@ -1349,6 +1349,23 @@ static void iommu_flush_dev_iotlb(struct dmar_domain *domain,
 					 mask);
 	}
 	spin_unlock_irqrestore(&domain->lock, flags);
+
+	if (!domain->nested_parent)
+		return;
+
+	spin_lock_irqsave(&domain->nest_lock, flags);
+	list_for_each_entry(info, &domain->nest_devices, plink)
+		/*
+		 * Device side only caches the result of nested
+		 * translation. Per stage-2 unmap, the related
+		 * nested translation result should be flushed
+		 * as well. However, there is no easy way to know
+		 * the exact range of the affecteda pages. So
+		 * need to flush the whole range to ensure not
+		 * stale cache on device.
+		 */
+		__iommu_flush_dev_iotlb(info, 0, MAX_AGAW_PFN_WIDTH);
+	spin_unlock_irqrestore(&domain->nest_lock, flags);
 }
 
 static void domain_flush_pasid_iotlb(struct intel_iommu *iommu,
