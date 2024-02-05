@@ -4754,6 +4754,7 @@ static int intel_iommu_set_dirty_tracking(struct iommu_domain *domain,
 {
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
 	struct device_domain_info *info;
+	unsigned long flags;
 	int ret;
 
 	spin_lock(&dmar_domain->lock);
@@ -4762,11 +4763,27 @@ static int intel_iommu_set_dirty_tracking(struct iommu_domain *domain,
 
 	list_for_each_entry(info, &dmar_domain->devices, link) {
 		ret = intel_pasid_setup_dirty_tracking(info->iommu,
-						       info->domain, info->dev,
+						       domain_id_iommu(
+							       info->domain,
+							       info->iommu),
+						       info->dev,
 						       IOMMU_NO_PASID, enable);
 		if (ret)
 			goto err_unwind;
 	}
+
+	spin_lock_irqsave(&dmar_domain->nest_lock, flags);
+	list_for_each_entry(info, &dmar_domain->nest_devices, plink) {
+		ret = intel_pasid_setup_dirty_tracking(info->iommu,
+						       domain_id_iommu(
+							       info->domain,
+							       info->iommu),
+						       info->dev,
+						       IOMMU_NO_PASID, enable);
+		if (ret)
+			goto err_unwind_nest;
+	}
+	spin_unlock_irqrestore(&dmar_domain->nest_lock, flags);
 
 	dmar_domain->dirty_tracking = enable;
 out_unlock:
@@ -4774,10 +4791,22 @@ out_unlock:
 
 	return 0;
 
+err_unwind_nest:
+	list_for_each_entry(info, &dmar_domain->nest_devices, plink)
+		intel_pasid_setup_dirty_tracking(info->iommu,
+						 domain_id_iommu(info->domain,
+								 info->iommu),
+						 info->dev,
+						 IOMMU_NO_PASID,
+						 dmar_domain->dirty_tracking);
+	spin_unlock_irqrestore(&dmar_domain->nest_lock, flags);
 err_unwind:
 	list_for_each_entry(info, &dmar_domain->devices, link)
-		intel_pasid_setup_dirty_tracking(info->iommu, dmar_domain,
-						 info->dev, IOMMU_NO_PASID,
+		intel_pasid_setup_dirty_tracking(info->iommu,
+						 domain_id_iommu(info->domain,
+								 info->iommu),
+						 info->dev,
+						 IOMMU_NO_PASID,
 						 dmar_domain->dirty_tracking);
 	spin_unlock(&dmar_domain->lock);
 	return ret;
