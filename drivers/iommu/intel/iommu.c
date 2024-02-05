@@ -3830,7 +3830,7 @@ void device_block_translation(struct device *dev)
 		return;
 
 	if (info->domain->domain.type == IOMMU_DOMAIN_NESTED)
-		intel_nested_detach_parent(info->domain, iommu);
+		intel_nested_detach_parent(info->domain, info);
 
 	spin_lock_irqsave(&info->domain->lock, flags);
 	list_del(&info->link);
@@ -3951,6 +3951,8 @@ intel_iommu_domain_alloc_user(struct device *dev, u32 flags,
 
 		dmar_domain->nested_parent = true;
 		xa_init(&dmar_domain->nest_iommu_array);
+		INIT_LIST_HEAD(&dmar_domain->nest_devices);
+		spin_lock_init(&dmar_domain->nest_lock);
 	}
 
 	if (dirty_tracking) {
@@ -3968,8 +3970,10 @@ static void intel_iommu_domain_free(struct iommu_domain *domain)
 {
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
 
-	if (dmar_domain->nested_parent)
+	if (dmar_domain->nested_parent) {
 		WARN_ON(!xa_empty(&dmar_domain->nest_iommu_array));
+		WARN_ON(!list_empty(&dmar_domain->nest_devices));
+	}
 	if (domain != &si_domain->domain)
 		domain_exit(dmar_domain);
 }

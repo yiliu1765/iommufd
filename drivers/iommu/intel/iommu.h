@@ -638,6 +638,10 @@ struct dmar_domain {
 			 */
 			/* Track nesting association per domain seq_id */
 			struct xarray nest_iommu_array;
+			/* Protect nest device tracking lists */
+			spinlock_t nest_lock;
+			/* all nest devices' list */
+			struct list_head nest_devices;
 		};
 
 		/* Nested user domain */
@@ -745,6 +749,7 @@ struct intel_iommu {
 /* PCI domain-device relationship */
 struct device_domain_info {
 	struct list_head link;	/* link to domain siblings */
+	struct list_head plink;	/* link to parent domain siblings */
 	u32 segment;		/* PCI segment number */
 	u8 bus;			/* PCI bus number */
 	u8 devfn;		/* PCI devfn number */
@@ -1080,7 +1085,7 @@ int prepare_domain_attach_device(struct iommu_domain *domain,
 void domain_update_iommu_cap(struct dmar_domain *domain);
 
 void intel_nested_detach_parent(struct dmar_domain *domain,
-				struct intel_iommu *iommu);
+				struct device_domain_info *info);
 
 int dmar_ir_support(void);
 

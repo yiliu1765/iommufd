@@ -21,14 +21,17 @@
 static DEFINE_IDA(domain_seq_ids);
 
 static int intel_nested_attach_parent(struct dmar_domain *domain,
-				      struct intel_iommu *iommu)
+				      struct device_domain_info *info)
 {
+	struct dmar_domain *s2_domain = domain->s2_domain;
+	struct intel_iommu *iommu = info->iommu;
 	struct domain_nesting_info *nest_info;
 	struct iommu_domain_info *did_info;
+	unsigned long flags;
 	int ret = 0;
 	void *curr;
 
-	nest_info = xa_load(&domain->s2_domain->nest_iommu_array,
+	nest_info = xa_load(&s2_domain->nest_iommu_array,
 			    domain->seq_id);
 	did_info = xa_load(&domain->iommu_array, iommu->seq_id);
 	if (unlikely(!did_info || !nest_info)) {
@@ -47,17 +50,31 @@ static int intel_nested_attach_parent(struct dmar_domain *domain,
 			  did_info, GFP_KERNEL);
 	if (curr)
 		ret = xa_err(curr) ? : -EBUSY;
-	return ret;
+
+	if (ret)
+		return ret;
+
+	spin_lock_irqsave(&s2_domain->nest_lock, flags);
+	list_add(&info->plink, &s2_domain->nest_devices);
+	spin_unlock_irqrestore(&s2_domain->nest_lock, flags);
+
+	return 0;
 }
 
 void intel_nested_detach_parent(struct dmar_domain *domain,
-				struct intel_iommu *iommu)
+				struct device_domain_info *info)
 {
+	struct dmar_domain *s2_domain = domain->s2_domain;
 	struct domain_nesting_info *nest_info;
+	unsigned long flags;
 
-	nest_info = xa_load(&domain->s2_domain->nest_iommu_array,
+	nest_info = xa_load(&s2_domain->nest_iommu_array,
 			    domain->seq_id);
-	xa_erase(&nest_info->iommu_array, iommu->seq_id);
+	xa_erase(&nest_info->iommu_array, info->iommu->seq_id);
+
+	spin_lock_irqsave(&s2_domain->nest_lock, flags);
+	list_del(&info->plink);
+	spin_unlock_irqrestore(&s2_domain->nest_lock, flags);
 }
 
 static int intel_nested_attach_dev(struct iommu_domain *domain,
@@ -102,7 +119,7 @@ static int intel_nested_attach_dev(struct iommu_domain *domain,
 		return ret;
 	}
 
-	ret = intel_nested_attach_parent(dmar_domain, iommu);
+	ret = intel_nested_attach_parent(dmar_domain, info);
 	if (ret) {
 		intel_pasid_tear_down_entry(iommu, dev,
 					    IOMMU_NO_PASID, false);
