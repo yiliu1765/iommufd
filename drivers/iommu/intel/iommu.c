@@ -1322,6 +1322,37 @@ static void __iommu_flush_dev_iotlb(struct device_domain_info *info,
 	quirk_extra_dev_tlb_flush(info, addr, mask, IOMMU_NO_PASID, qdep);
 }
 
+static void nested_parent_domain_flush_dev_iotlb(struct dmar_domain *domain)
+{
+	struct dmar_domain *s1_domain;
+	unsigned long flags;
+
+	if (!domain->nested_parent)
+		return;
+
+	spin_lock_irqsave(&domain->s1_lock, flags);
+	list_for_each_entry(s1_domain, &domain->s1_domains, s2_link) {
+		struct device_domain_info *info;
+		unsigned long tmp_flags;
+
+		if (!s1_domain->has_iotlb_device)
+			continue;
+
+		spin_lock_irqsave(&s1_domain->lock, tmp_flags);
+		list_for_each_entry(info, &s1_domain->devices, link)
+			/*
+			 * Address translation cache in device side caches the
+			 * result of nested translation. There is no easy way
+			 * to identify the exact set of nested translations
+			 * affected by a change in S2. So just flush the entire
+			 * device cache.
+			 */
+			__iommu_flush_dev_iotlb(info, 0, MAX_AGAW_PFN_WIDTH);
+		spin_unlock_irqrestore(&s1_domain->lock, tmp_flags);
+	}
+	spin_unlock_irqrestore(&domain->s1_lock, flags);
+}
+
 static void iommu_flush_dev_iotlb(struct dmar_domain *domain,
 				  u64 addr, unsigned mask)
 {
@@ -1501,6 +1532,7 @@ static void intel_flush_iotlb_all(struct iommu_domain *domain)
 	}
 
 	nested_parent_domain_flush_iotlb(dmar_domain, 0, -1, 0);
+	nested_parent_domain_flush_dev_iotlb(dmar_domain);
 }
 
 static void iommu_disable_protect_mem_regions(struct intel_iommu *iommu)
@@ -2026,6 +2058,7 @@ static void switch_to_super_page(struct dmar_domain *domain,
 						      0, 0);
 			nested_parent_domain_flush_iotlb(domain, start_pfn,
 							 lvl_pages, 0);
+			nested_parent_domain_flush_dev_iotlb(domain);
 		}
 
 		pte++;
@@ -4155,6 +4188,7 @@ static void intel_iommu_tlb_sync(struct iommu_domain *domain,
 
 	nested_parent_domain_flush_iotlb(dmar_domain, start_pfn, nrpages,
 					 list_empty(&gather->freelist));
+	nested_parent_domain_flush_dev_iotlb(dmar_domain);
 	put_pages_list(&gather->freelist);
 }
 
