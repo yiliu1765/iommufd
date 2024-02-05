@@ -1460,15 +1460,16 @@ static void nested_parent_domain_flush_iotlb(struct dmar_domain *domain,
 }
 
 /* Notification for newly created mappings */
-static void __mapping_notify_one(struct intel_iommu *iommu, struct dmar_domain *domain,
+static void __mapping_notify_one(struct intel_iommu *iommu, u16 did,
+				 bool use_first_level,
 				 unsigned long pfn, unsigned int pages)
 {
 	/*
 	 * It's a non-present to present mapping. Only flush if caching mode
 	 * and second level.
 	 */
-	if (cap_caching_mode(iommu->cap) && !domain->use_first_level)
-		iommu_flush_iotlb_psi(iommu, domain, pfn, pages, 0, 1);
+	if (cap_caching_mode(iommu->cap) && !use_first_level)
+		__iommu_flush_iotlb_psi(iommu, did, pfn, pages, 0);
 	else
 		iommu_flush_write_buffer(iommu);
 }
@@ -4587,7 +4588,23 @@ static int intel_iommu_iotlb_sync_map(struct iommu_domain *domain,
 	unsigned long i;
 
 	xa_for_each(&dmar_domain->iommu_array, i, info)
-		__mapping_notify_one(info->iommu, dmar_domain, pfn, pages);
+		__mapping_notify_one(info->iommu,
+				     dmar_domain->use_first_level,
+				     info->did, pfn, pages);
+
+	if (dmar_domain->nested_parent) {
+		struct domain_nesting_info *nest_info;
+
+		xa_for_each(&dmar_domain->nest_iommu_array, i, nest_info) {
+			unsigned long idx;
+
+			xa_for_each(&nest_info->iommu_array, idx, info)
+				/* Nested parent never uses first level */
+				__mapping_notify_one(info->iommu, false,
+						     info->did, pfn, pages);
+		}
+	}
+
 	return 0;
 }
 
