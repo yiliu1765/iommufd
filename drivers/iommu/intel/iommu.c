@@ -1438,6 +1438,27 @@ static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 		iommu_flush_dev_iotlb(domain, addr, mask);
 }
 
+static void nested_parent_domain_flush_iotlb(struct dmar_domain *domain,
+					     unsigned long pfn,
+					     unsigned long pages,
+					     int ih)
+{
+	struct domain_nesting_info *nest_info;
+	unsigned long idx;
+
+	if (domain->nested_parent)
+		return;
+
+	xa_for_each(&domain->nest_iommu_array, idx, nest_info) {
+		struct iommu_domain_info *info;
+		unsigned long i;
+
+		xa_for_each(&nest_info->iommu_array, i, info)
+			__iommu_flush_iotlb_psi(info->iommu, info->did,
+						pfn, pages, ih);
+	}
+}
+
 /* Notification for newly created mappings */
 static void __mapping_notify_one(struct intel_iommu *iommu, struct dmar_domain *domain,
 				 unsigned long pfn, unsigned int pages)
@@ -1471,6 +1492,8 @@ static void intel_flush_iotlb_all(struct iommu_domain *domain)
 		if (!cap_caching_mode(iommu->cap))
 			iommu_flush_dev_iotlb(dmar_domain, 0, MAX_AGAW_PFN_WIDTH);
 	}
+
+	nested_parent_domain_flush_iotlb(dmar_domain, 0, -1, 0);
 }
 
 static void iommu_disable_protect_mem_regions(struct intel_iommu *iommu)
@@ -1994,6 +2017,8 @@ static void switch_to_super_page(struct dmar_domain *domain,
 				iommu_flush_iotlb_psi(info->iommu, domain,
 						      start_pfn, lvl_pages,
 						      0, 0);
+			nested_parent_domain_flush_iotlb(domain, start_pfn,
+							 lvl_pages, 0);
 		}
 
 		pte++;
@@ -4127,6 +4152,8 @@ static void intel_iommu_tlb_sync(struct iommu_domain *domain,
 				      start_pfn, nrpages,
 				      list_empty(&gather->freelist), 0);
 
+	nested_parent_domain_flush_iotlb(dmar_domain, start_pfn, nrpages,
+					 list_empty(&gather->freelist));
 	put_pages_list(&gather->freelist);
 }
 
