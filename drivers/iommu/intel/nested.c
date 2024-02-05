@@ -20,6 +20,46 @@
 
 static DEFINE_IDA(domain_seq_ids);
 
+static int intel_nested_attach_parent(struct dmar_domain *domain,
+				      struct intel_iommu *iommu)
+{
+	struct domain_nesting_info *nest_info;
+	struct iommu_domain_info *did_info;
+	int ret = 0;
+	void *curr;
+
+	nest_info = xa_load(&domain->s2_domain->nest_iommu_array,
+			    domain->seq_id);
+	did_info = xa_load(&domain->iommu_array, iommu->seq_id);
+	if (unlikely(!did_info || !nest_info)) {
+		WARN_ON(1);
+		return -ENODEV;
+	}
+
+	/*
+	 * This does not gain extra iommu_domain_info::refcnt, it relies
+	 * on the refcnt reference by the domain_attach_iommu() called
+	 * with nested domain. This requires calling the
+	 * intel_nested_at[de]tach_parent between the paired
+	 * domain_at[de]tach_iommu(). Otherwise, it would be problamatic.
+	 */
+	curr = xa_cmpxchg(&nest_info->iommu_array, iommu->seq_id, NULL,
+			  did_info, GFP_KERNEL);
+	if (curr)
+		ret = xa_err(curr) ? : -EBUSY;
+	return ret;
+}
+
+void intel_nested_detach_parent(struct dmar_domain *domain,
+				struct intel_iommu *iommu)
+{
+	struct domain_nesting_info *nest_info;
+
+	nest_info = xa_load(&domain->s2_domain->nest_iommu_array,
+			    domain->seq_id);
+	xa_erase(&nest_info->iommu_array, iommu->seq_id);
+}
+
 static int intel_nested_attach_dev(struct iommu_domain *domain,
 				   struct device *dev)
 {
@@ -62,6 +102,14 @@ static int intel_nested_attach_dev(struct iommu_domain *domain,
 		return ret;
 	}
 
+	ret = intel_nested_attach_parent(dmar_domain, iommu);
+	if (ret) {
+		intel_pasid_tear_down_entry(iommu, dev,
+					    IOMMU_NO_PASID, false);
+		domain_detach_iommu(dmar_domain, iommu);
+		return ret;
+	}
+
 	info->domain = dmar_domain;
 	spin_lock_irqsave(&dmar_domain->lock, flags);
 	list_add(&info->link, &dmar_domain->devices);
@@ -72,8 +120,15 @@ static int intel_nested_attach_dev(struct iommu_domain *domain,
 
 static void intel_nested_domain_free(struct iommu_domain *domain)
 {
-	ida_free(&domain_seq_ids, to_dmar_domain(domain)->seq_id);
-	kfree(to_dmar_domain(domain));
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct domain_nesting_info *nest_info;
+
+	nest_info = xa_erase(&dmar_domain->s2_domain->nest_iommu_array,
+			     dmar_domain->seq_id);
+	WARN_ON(!xa_empty(&nest_info->iommu_array));
+	kfree(nest_info);
+	ida_free(&domain_seq_ids, dmar_domain->seq_id);
+	kfree(dmar_domain);
 }
 
 static void nested_flush_dev_iotlb(struct dmar_domain *domain, u64 addr,
@@ -173,8 +228,10 @@ struct iommu_domain *intel_nested_domain_alloc(struct iommu_domain *parent,
 					       const struct iommu_user_data *user_data)
 {
 	struct dmar_domain *s2_domain = to_dmar_domain(parent);
+	struct domain_nesting_info *nest_info;
 	struct iommu_hwpt_vtd_s1 vtd;
 	struct dmar_domain *domain;
+	void *curr;
 	int ret;
 
 	/* Must be nested domain */
@@ -201,6 +258,21 @@ struct iommu_domain *intel_nested_domain_alloc(struct iommu_domain *parent,
 		goto out_free_domain;
 	}
 
+	nest_info = kzalloc(sizeof(*nest_info), GFP_KERNEL);
+	if (!nest_info) {
+		ret = -ENOMEM;
+		goto out_free_id;
+	}
+
+	xa_init(&nest_info->iommu_array);
+
+	curr = xa_cmpxchg(&s2_domain->nest_iommu_array, domain->seq_id,
+			  NULL, nest_info, GFP_KERNEL);
+	if (curr) {
+		ret = xa_err(curr) ? : -EBUSY;
+		goto out_free_info;
+	}
+
 	domain->use_first_level = true;
 	domain->s2_domain = s2_domain;
 	domain->s1_pgtbl = vtd.pgtbl_addr;
@@ -214,6 +286,10 @@ struct iommu_domain *intel_nested_domain_alloc(struct iommu_domain *parent,
 
 	return &domain->domain;
 
+out_free_info:
+	kfree(nest_info);
+out_free_id:
+	ida_free(&domain_seq_ids, domain->seq_id);
 out_free_domain:
 	kfree(domain);
 	return ERR_PTR(ret);

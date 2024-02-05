@@ -584,6 +584,10 @@ struct iommu_domain_info {
 					 * to VT-d spec, section 9.3 */
 };
 
+struct domain_nesting_info {
+	struct xarray iommu_array;	/* Attached IOMMU array */
+};
+
 struct dmar_domain {
 	int	nid;			/* node id */
 	struct xarray iommu_array;	/* Attached IOMMU array */
@@ -627,6 +631,13 @@ struct dmar_domain {
 			int		agaw;
 			/* maximum mapped address */
 			u64		max_addr;
+
+			/*
+			 * Nesting attachments, only valid
+			 * when nested_parent is set.
+			 */
+			/* Track nesting association per domain seq_id */
+			struct xarray nest_iommu_array;
 		};
 
 		/* Nested user domain */
@@ -1067,6 +1078,9 @@ void device_block_translation(struct device *dev);
 int prepare_domain_attach_device(struct iommu_domain *domain,
 				 struct device *dev);
 void domain_update_iommu_cap(struct dmar_domain *domain);
+
+void intel_nested_detach_parent(struct dmar_domain *domain,
+				struct intel_iommu *iommu);
 
 int dmar_ir_support(void);
 
