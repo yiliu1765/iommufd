@@ -1423,20 +1423,37 @@ static void domain_flush_dev_iotlb(struct dmar_domain *domain,
 	spin_unlock_irqrestore(&domain->lock, flags);
 }
 
-static void domain_flush_pasid_iotlb(struct intel_iommu *iommu,
-				     struct dmar_domain *domain, u64 addr,
+static void domain_flush_pasid_iotlb(struct dmar_domain *domain, u64 addr,
 				     unsigned long npages, bool ih)
 {
-	u16 did = domain_id_iommu(domain, iommu);
 	struct dev_pasid_info *dev_pasid;
 	unsigned long flags;
 
 	spin_lock_irqsave(&domain->lock, flags);
-	list_for_each_entry(dev_pasid, &domain->dev_pasids, link_domain)
-		qi_flush_piotlb(iommu, did, dev_pasid->pasid, addr, npages, ih);
+	list_for_each_entry(dev_pasid, &domain->dev_pasids, link_domain) {
+		struct device_domain_info *dev_info =
+					dev_iommu_priv_get(dev_pasid->dev);
 
-	if (!list_empty(&domain->devices))
-		qi_flush_piotlb(iommu, did, IOMMU_NO_PASID, addr, npages, ih);
+		qi_flush_piotlb(dev_info->iommu,
+				domain_id_iommu(domain, dev_info->iommu),
+				dev_pasid->pasid, addr, npages, ih);
+	}
+
+	/*
+	 * iommu unit can be attached in both set_dev_pasid() and
+	 * attach_device() path. If there is no attach_device(), then
+	 * no need to flush piotlb with IOMMU_NO_PASID.
+	 */
+	if (!list_empty(&domain->devices)) {
+		struct iommu_domain_info *domain_info;
+		unsigned long idx;
+
+		xa_for_each(&domain->iommu_array, idx, domain_info)
+			qi_flush_piotlb(domain_info->iommu,
+					domain_id_iommu(domain,
+							domain_info->iommu),
+					IOMMU_NO_PASID, addr, npages, ih);
+	}
 	spin_unlock_irqrestore(&domain->lock, flags);
 }
 
@@ -1485,7 +1502,6 @@ static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 				  unsigned long pfn, unsigned long pages,
 				  int ih)
 {
-	uint64_t addr = (uint64_t)pfn << VTD_PAGE_SHIFT;
 	u16 did = domain_id_iommu(domain, iommu);
 
 	if (WARN_ON(!pages))
@@ -1494,10 +1510,29 @@ static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
 	if (ih)
 		ih = 1 << 6;
 
-	if (domain->use_first_level)
-		domain_flush_pasid_iotlb(iommu, domain, addr, pages, ih);
-	else
-		__iommu_flush_iotlb_psi(iommu, did, pfn, pages, ih);
+	__iommu_flush_iotlb_psi(iommu, did, pfn, pages, ih);
+}
+
+static void domain_flush_iotlb(struct dmar_domain *domain,
+			       unsigned long pfn, unsigned long pages,
+			       int ih)
+{
+	struct iommu_domain_info *info;
+	unsigned long idx;
+
+	if (domain == si_domain) {
+		struct dmar_drhd_unit *drhd;
+		struct intel_iommu *iommu;
+
+		rcu_read_lock();
+		for_each_active_iommu(iommu, drhd)
+			iommu_flush_iotlb_psi(iommu, domain, pfn, pages, ih);
+		rcu_read_unlock();
+		return;
+	}
+
+	xa_for_each(&domain->iommu_array, idx, info)
+		iommu_flush_iotlb_psi(info->iommu, domain, pfn, pages, ih);
 }
 
 /* Notification for newly created mappings */
@@ -1557,18 +1592,12 @@ static void parent_domain_flush(struct dmar_domain *domain,
 static void intel_flush_iotlb_all(struct iommu_domain *domain)
 {
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
-	struct iommu_domain_info *info;
-	unsigned long idx;
 
-	xa_for_each(&dmar_domain->iommu_array, idx, info) {
-		struct intel_iommu *iommu = info->iommu;
+	if (dmar_domain->use_first_level)
+		domain_flush_pasid_iotlb(dmar_domain, 0, -1, 0);
+	else
+		domain_flush_iotlb(dmar_domain, 0, -1, 0);
 
-		if (dmar_domain->use_first_level)
-			domain_flush_pasid_iotlb(iommu, dmar_domain, 0, -1, 0);
-		else
-			iommu_flush_iotlb_psi(info->iommu, dmar_domain,
-					      0, -1, 0);
-	}
 	domain_flush_dev_iotlb(dmar_domain, 0, MAX_AGAW_PFN_WIDTH);
 
 	if (dmar_domain->nested_parent)
@@ -2078,9 +2107,7 @@ static void switch_to_super_page(struct dmar_domain *domain,
 				 unsigned long end_pfn, int level)
 {
 	unsigned long lvl_pages = lvl_to_nr_pages(level);
-	struct iommu_domain_info *info;
 	struct dma_pte *pte = NULL;
-	unsigned long i;
 
 	while (start_pfn <= end_pfn) {
 		if (!pte)
@@ -2092,10 +2119,13 @@ static void switch_to_super_page(struct dmar_domain *domain,
 					       start_pfn + lvl_pages - 1,
 					       level + 1);
 
-			xa_for_each(&domain->iommu_array, i, info)
-				iommu_flush_iotlb_psi(info->iommu, domain,
-						      start_pfn, lvl_pages,
-						      0);
+			if (domain->use_first_level)
+				domain_flush_pasid_iotlb(domain,
+							 start_pfn << VTD_PAGE_SHIFT,
+							 lvl_pages, 0);
+			else
+				domain_flush_iotlb(domain, start_pfn,
+						   lvl_pages, 0);
 			domain_flush_dev_iotlb(domain, start_pfn << VTD_PAGE_SHIFT,
 					       ilog2(__roundup_pow_of_two(lvl_pages)));
 			if (domain->nested_parent)
@@ -3485,18 +3515,19 @@ static int intel_iommu_memory_notifier(struct notifier_block *nb,
 	case MEM_OFFLINE:
 	case MEM_CANCEL_ONLINE:
 		{
-			struct dmar_drhd_unit *drhd;
-			struct intel_iommu *iommu;
 			LIST_HEAD(freelist);
 
 			domain_unmap(si_domain, start_vpfn, last_vpfn, &freelist);
 
-			rcu_read_lock();
-			for_each_active_iommu(iommu, drhd)
-				iommu_flush_iotlb_psi(iommu, si_domain,
-					start_vpfn, mhp->nr_pages,
-					list_empty(&freelist));
-			rcu_read_unlock();
+			if (si_domain->use_first_level)
+				domain_flush_pasid_iotlb(si_domain,
+							 start_vpfn << VTD_PAGE_SHIFT,
+							 mhp->nr_pages,
+							 list_empty(&freelist));
+			else
+				domain_flush_iotlb(si_domain, start_vpfn,
+						   mhp->nr_pages,
+						   list_empty(&freelist));
 			domain_flush_dev_iotlb(si_domain, start_vpfn << VTD_PAGE_SHIFT,
 					       ilog2(__roundup_pow_of_two(mhp->nr_pages)));
 			put_pages_list(&freelist);
@@ -4227,9 +4258,15 @@ static void intel_iommu_tlb_sync(struct iommu_domain *domain,
 	start_pfn = mm_to_dma_pfn_start(iova_pfn);
 
 	xa_for_each(&dmar_domain->iommu_array, i, info)
-		iommu_flush_iotlb_psi(info->iommu, dmar_domain,
-				      start_pfn, nrpages,
-				      list_empty(&gather->freelist));
+	if (dmar_domain->use_first_level)
+		domain_flush_pasid_iotlb(dmar_domain,
+					 start_pfn << VTD_PAGE_SHIFT,
+					 nrpages,
+					 list_empty(&gather->freelist));
+	else
+		domain_flush_iotlb(dmar_domain,
+				   start_pfn, nrpages,
+				   list_empty(&gather->freelist));
 
 	domain_flush_dev_iotlb(dmar_domain, start_pfn << VTD_PAGE_SHIFT,
 			       ilog2(__roundup_pow_of_two(nrpages)));
