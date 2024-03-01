@@ -1394,8 +1394,8 @@ static void __iommu_flush_dev_iotlb(struct device_domain_info *info,
 	quirk_extra_dev_tlb_flush(info, addr, mask, IOMMU_NO_PASID, qdep);
 }
 
-static void domain_flush_dev_iotlb(struct dmar_domain *domain,
-				   u64 addr, unsigned mask)
+void domain_flush_dev_iotlb(struct dmar_domain *domain,
+			    u64 addr, unsigned mask)
 {
 	struct dev_pasid_info *dev_pasid;
 	struct device_domain_info *info;
@@ -1423,8 +1423,8 @@ static void domain_flush_dev_iotlb(struct dmar_domain *domain,
 	spin_unlock_irqrestore(&domain->lock, flags);
 }
 
-static void domain_flush_pasid_iotlb(struct dmar_domain *domain, u64 addr,
-				     unsigned long npages, bool ih)
+void domain_flush_pasid_iotlb(struct dmar_domain *domain, u64 addr,
+			      unsigned long npages, bool ih)
 {
 	struct dev_pasid_info *dev_pasid;
 	unsigned long flags;

@@ -81,38 +81,12 @@ static void intel_nested_domain_free(struct iommu_domain *domain)
 	kfree(dmar_domain);
 }
 
-static void nested_flush_dev_iotlb(struct dmar_domain *domain, u64 addr,
-				   unsigned int mask)
-{
-	struct device_domain_info *info;
-	unsigned long flags;
-	u16 sid, qdep;
-
-	spin_lock_irqsave(&domain->lock, flags);
-	list_for_each_entry(info, &domain->devices, link) {
-		if (!info->ats_enabled)
-			continue;
-		sid = info->bus << 8 | info->devfn;
-		qdep = info->ats_qdep;
-		qi_flush_dev_iotlb(info->iommu, sid, info->pfsid,
-				   qdep, addr, mask);
-		quirk_extra_dev_tlb_flush(info, addr, mask,
-					  IOMMU_NO_PASID, qdep);
-	}
-	spin_unlock_irqrestore(&domain->lock, flags);
-}
-
 static void intel_nested_flush_cache(struct dmar_domain *domain, u64 addr,
 				     u64 npages, bool ih)
 {
-	struct iommu_domain_info *info;
 	unsigned int mask;
-	unsigned long i;
 
-	xa_for_each(&domain->iommu_array, i, info)
-		qi_flush_piotlb(info->iommu,
-				domain_id_iommu(domain, info->iommu),
-				IOMMU_NO_PASID, addr, npages, ih);
+	domain_flush_pasid_iotlb(domain, addr, npages, ih);
 
 	if (!domain->has_iotlb_device)
 		return;
@@ -122,7 +96,7 @@ static void intel_nested_flush_cache(struct dmar_domain *domain, u64 addr,
 	else
 		mask = ilog2(__roundup_pow_of_two(npages));
 
-	nested_flush_dev_iotlb(domain, addr, mask);
+	domain_flush_dev_iotlb(domain, addr, mask);
 }
 
 static int intel_nested_cache_invalidate_user(struct iommu_domain *domain,
