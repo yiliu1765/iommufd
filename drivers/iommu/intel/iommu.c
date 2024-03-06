@@ -4718,7 +4718,7 @@ static void intel_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
 
 	domain = iommu_get_domain_for_dev_pasid(dev, pasid, 0);
 	if (WARN_ON_ONCE(!domain))
-		goto out_tear_down;
+		return;
 
 	/*
 	 * The SVA implementation needs to handle its own stuffs like the mm
