@@ -4707,30 +4707,29 @@ static int intel_iommu_iotlb_sync_map(struct iommu_domain *domain,
 	return 0;
 }
 
-static void intel_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
+/*
+ * Clear the pasid table entries so that all DMA requests with specific
+ * PASID from the device are blocked. If the page table has been set, clean
+ * up the data structures.
+ */
+static void device_pasid_block_translation(struct device *dev, ioasid_t pasid,
+					   struct dmar_domain *dmar_domain)
 {
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 	struct dev_pasid_info *curr, *dev_pasid = NULL;
 	struct intel_iommu *iommu = info->iommu;
-	struct dmar_domain *dmar_domain;
-	struct iommu_domain *domain;
 	unsigned long flags;
-
-	domain = iommu_get_domain_for_dev_pasid(dev, pasid, 0);
-	if (WARN_ON_ONCE(!domain))
-		return;
 
 	/*
 	 * The SVA implementation needs to handle its own stuffs like the mm
 	 * notification. Before consolidating that code into iommu core, let
 	 * the intel sva code handle it.
 	 */
-	if (domain->type == IOMMU_DOMAIN_SVA) {
+	if (dmar_domain->domain.type == IOMMU_DOMAIN_SVA) {
 		intel_svm_remove_dev_pasid(dev, pasid);
 		goto out_tear_down;
 	}
 
-	dmar_domain = to_dmar_domain(domain);
 	spin_lock_irqsave(&dmar_domain->lock, flags);
 	list_for_each_entry(curr, &dmar_domain->dev_pasids, link_domain) {
 		if (curr->dev == dev && curr->pasid == pasid) {
@@ -4750,6 +4749,16 @@ out_tear_down:
 	intel_drain_pasid_prq(dev, pasid);
 }
 
+static void intel_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
+{
+	struct iommu_domain *domain;
+
+	domain = iommu_get_domain_for_dev_pasid(dev, pasid, 0);
+	if (WARN_ON_ONCE(!domain))
+		return;
+	device_pasid_block_translation(dev, pasid, to_dmar_domain(domain));
+}
+
 static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
 				     struct device *dev, ioasid_t pasid)
 {
@@ -4757,6 +4766,7 @@ static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
 	struct intel_iommu *iommu = info->iommu;
 	struct dev_pasid_info *dev_pasid;
+	struct iommu_domain *old_domain;
 	unsigned long flags;
 	int ret;
 
@@ -4768,6 +4778,11 @@ static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
 
 	if (context_copied(iommu, info->bus, info->devfn))
 		return -EBUSY;
+
+	old_domain = iommu_get_domain_for_dev_pasid(dev, pasid, 0);
+	if (old_domain)
+		device_pasid_block_translation(dev, pasid,
+					       to_dmar_domain(old_domain));
 
 	ret = prepare_domain_attach_device(domain, dev);
 	if (ret)
