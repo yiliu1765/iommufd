@@ -4739,8 +4739,9 @@ static void intel_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
 			break;
 		}
 	}
-	WARN_ON_ONCE(!dev_pasid);
 	spin_unlock_irqrestore(&dmar_domain->lock, flags);
+	if (WARN_ON_ONCE(!dev_pasid))
+		return;
 
 	domain_detach_iommu(dmar_domain, iommu);
 	intel_iommu_debugfs_remove_dev_pasid(dev_pasid);
