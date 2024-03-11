@@ -4398,6 +4398,7 @@ static struct iommu_device *intel_iommu_probe_device(struct device *dev)
 
 	info->dev = dev;
 	info->iommu = iommu;
+	xa_init(&info->pasid_array);
 	if (dev_is_pci(dev)) {
 		if (ecap_dev_iotlb_support(iommu->ecap) &&
 		    pci_ats_supported(pdev) &&
@@ -4464,6 +4465,7 @@ static void intel_iommu_release_device(struct device *dev)
 	mutex_unlock(&iommu->iopf_lock);
 	dmar_remove_one_dev_info(dev);
 	intel_pasid_free_table(dev);
+	WARN_ON(!xa_empty(&info->pasid_array));
 	intel_iommu_debugfs_remove_dev(info);
 	kfree(info);
 	set_dma_ops(dev, NULL);
@@ -4716,7 +4718,7 @@ static void intel_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
 	struct iommu_domain *domain;
 	unsigned long flags;
 
-	domain = iommu_get_domain_for_dev_pasid(dev, pasid, 0);
+	domain = xa_erase(&info->pasid_array, pasid);
 	if (WARN_ON_ONCE(!domain))
 		return;
 
@@ -4798,6 +4800,8 @@ static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
 	spin_lock_irqsave(&dmar_domain->lock, flags);
 	list_add(&dev_pasid->link_domain, &dmar_domain->dev_pasids);
 	spin_unlock_irqrestore(&dmar_domain->lock, flags);
+
+	xa_store(&info->pasid_array, pasid, dmar_domain, GFP_KERNEL);
 
 	if (domain->type & __IOMMU_DOMAIN_PAGING)
 		intel_iommu_debugfs_create_dev_pasid(dev_pasid);

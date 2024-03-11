@@ -767,6 +767,7 @@ struct device_domain_info {
 #ifdef CONFIG_INTEL_IOMMU_DEBUGFS
 	struct dentry *debugfs_dentry; /* pointer to device directory dentry */
 #endif
+	struct xarray pasid_array; /* Attached domains per PASID */
 };
 
 struct dev_pasid_info {
