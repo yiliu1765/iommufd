@@ -3356,17 +3356,22 @@ int iommu_attach_device_pasid(struct iommu_domain *domain,
 		return -EINVAL;
 
 	mutex_lock(&group->mutex);
-	curr = xa_cmpxchg(&group->pasid_array, pasid, NULL, domain, GFP_KERNEL);
+	curr = xa_load(&group->pasid_array, pasid);
 	if (curr) {
-		ret = xa_err(curr) ? : -EBUSY;
+		ret = (curr == domain) ? 0 : -EBUSY;
 		goto out_unlock;
 	}
 
 	ret = __iommu_set_group_pasid(domain, group, pasid);
 	if (ret) {
 		__iommu_remove_group_pasid(group, pasid);
-		xa_erase(&group->pasid_array, pasid);
+		goto out_unlock;
 	}
+
+	ret = xa_err(xa_store(&group->pasid_array, pasid,
+			      domain, GFP_KERNEL));
+	if (ret)
+		__iommu_remove_group_pasid(group, pasid);
 out_unlock:
 	mutex_unlock(&group->mutex);
 	return ret;
