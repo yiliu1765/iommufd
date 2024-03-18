@@ -111,8 +111,10 @@ void iommufd_fault_domain_detach_dev(struct iommufd_hw_pagetable *hwpt,
 	struct iommufd_attach_handle *handle;
 
 	handle = iommufd_device_get_attach_handle(idev, pasid);
-	WARN_ON(pasid != IOMMU_NO_PASID);
-	iommu_detach_group_handle(hwpt->domain, idev->igroup->group);
+	if (pasid == IOMMU_NO_PASID)
+		iommu_detach_group_handle(hwpt->domain, idev->igroup->group);
+	else
+		iommu_detach_device_pasid(hwpt->domain, idev->dev, pasid);
 	iommufd_auto_response_faults(hwpt, handle);
 	iommufd_fault_iopf_disable(idev);
 	kfree(handle);
