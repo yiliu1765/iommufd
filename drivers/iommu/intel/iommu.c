@@ -4707,7 +4707,13 @@ static int intel_iommu_iotlb_sync_map(struct iommu_domain *domain,
 	return 0;
 }
 
-static void intel_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
+/*
+ * Clear the pasid table entries so that all DMA requests with specific
+ * PASID from the device are blocked. If the page table has been set, clean
+ * up the data structures.
+ */
+static void device_pasid_block_translation(struct device *dev, ioasid_t pasid,
+					   bool remove)
 {
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 	struct dev_pasid_info *curr, *dev_pasid = NULL;
@@ -4717,8 +4723,11 @@ static void intel_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
 	unsigned long flags;
 
 	domain = iommu_get_domain_for_dev_pasid(dev, pasid, 0);
-	if (WARN_ON_ONCE(!domain))
+	if (!domain) {
+		/* remove expects an existing domain */
+		WARN_ON_ONCE(remove);
 		return;
+	}
 
 	/*
 	 * The SVA implementation needs to handle its own stuffs like the mm
@@ -4751,6 +4760,11 @@ out_tear_down:
 	intel_drain_pasid_prq(dev, pasid);
 }
 
+static void intel_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
+{
+	device_pasid_block_translation(dev, pasid, true);
+}
+
 static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
 				     struct device *dev, ioasid_t pasid)
 {
@@ -4769,6 +4783,9 @@ static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
 
 	if (context_copied(iommu, info->bus, info->devfn))
 		return -EBUSY;
+
+	/* Try to block prior translation if there is */
+	device_pasid_block_translation(dev, pasid, false);
 
 	ret = prepare_domain_attach_device(domain, dev);
 	if (ret)
