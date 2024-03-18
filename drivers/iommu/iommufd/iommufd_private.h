@@ -394,6 +394,7 @@ struct iommufd_device {
 	struct list_head group_item;
 	/* always the physical device */
 	struct device *dev;
+	struct xarray pasid_hwpts;
 	bool enforce_cache_coherency;
 };
 
@@ -407,6 +408,20 @@ iommufd_get_device(struct iommufd_ucmd *ucmd, u32 id)
 
 void iommufd_device_destroy(struct iommufd_object *obj);
 int iommufd_get_hw_info(struct iommufd_ucmd *ucmd);
+
+typedef struct iommufd_hw_pagetable *(*attach_fn)(
+			struct iommufd_device *idev, u32 pasid,
+			struct iommufd_hw_pagetable *hwpt);
+
+int iommufd_device_change_pt(struct iommufd_device *idev, u32 pasid,
+			     u32 *pt_id, attach_fn do_attach);
+
+struct iommufd_hw_pagetable *
+iommufd_device_pasid_do_attach(struct iommufd_device *idev, u32 pasid,
+			       struct iommufd_hw_pagetable *hwpt);
+struct iommufd_hw_pagetable *
+iommufd_device_pasid_do_replace(struct iommufd_device *idev, u32 pasid,
+				struct iommufd_hw_pagetable *hwpt);
 
 struct iommufd_access {
 	struct iommufd_object obj;
