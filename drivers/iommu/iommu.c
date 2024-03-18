@@ -3330,18 +3330,29 @@ static void __iommu_remove_group_pasid(struct iommu_group *group,
 	}
 }
 
-/*
- * iommu_attach_device_pasid() - Attach a domain to pasid of device
- * @domain: the iommu domain.
- * @dev: the attached device.
- * @pasid: the pasid of the device.
- *
- * Return: 0 on success, or an error.
- */
-int iommu_attach_device_pasid(struct iommu_domain *domain,
-			      struct device *dev, ioasid_t pasid)
+static int __iommu_attach_group_pasid(struct iommu_domain *domain,
+				      struct iommu_group *group,
+				      ioasid_t pasid)
 {
-	/* Caller must be a probed driver on dev */
+	int ret;
+
+	ret = __iommu_set_group_pasid(domain, group, pasid);
+	if (ret) {
+		__iommu_remove_group_pasid(group, pasid);
+		return ret;
+	}
+
+	ret = xa_err(xa_store(&group->pasid_array, pasid,
+			      domain, GFP_KERNEL));
+	if (ret)
+		__iommu_remove_group_pasid(group, pasid);
+	return ret;
+}
+
+static int __iommu_attach_device_pasid(struct iommu_domain *domain,
+				       struct device *dev, ioasid_t pasid,
+				       bool replace)
+{
 	struct iommu_group *group = dev->iommu_group;
 	void *curr;
 	int ret;
@@ -3358,25 +3369,68 @@ int iommu_attach_device_pasid(struct iommu_domain *domain,
 	mutex_lock(&group->mutex);
 	curr = xa_load(&group->pasid_array, pasid);
 	if (curr) {
-		ret = (curr == domain) ? 0 : -EBUSY;
-		goto out_unlock;
+		if (curr == domain) {
+			ret = 0;
+			goto out_unlock;
+		} else if (!replace) {
+			ret = -EBUSY;
+			goto out_unlock;
+		}
 	}
 
-	ret = __iommu_set_group_pasid(domain, group, pasid);
+	ret = __iommu_attach_group_pasid(domain, group, pasid);
 	if (ret) {
-		__iommu_remove_group_pasid(group, pasid);
+		if (curr)
+			goto out_rollback;
 		goto out_unlock;
 	}
 
-	ret = xa_err(xa_store(&group->pasid_array, pasid,
-			      domain, GFP_KERNEL));
-	if (ret)
-		__iommu_remove_group_pasid(group, pasid);
+	mutex_unlock(&group->mutex);
+	return 0;
+
+out_rollback:
+	/* It's a driver bug to fail attach with a previously good domain */
+	if (WARN_ON(__iommu_attach_group_pasid(curr, group, pasid)))
+		xa_erase(&group->pasid_array, pasid);
 out_unlock:
 	mutex_unlock(&group->mutex);
 	return ret;
 }
+
+/*
+ * iommu_attach_device_pasid() - Attach a domain to pasid of device
+ * @domain: the iommu domain.
+ * @dev: the attached device.
+ * @pasid: the pasid of the device.
+ *
+ * Return: 0 on success, or an error.
+ */
+int iommu_attach_device_pasid(struct iommu_domain *domain,
+			      struct device *dev, ioasid_t pasid)
+{
+	/* Caller must be a probed driver on dev */
+	return __iommu_attach_device_pasid(domain, dev, pasid, false);
+}
 EXPORT_SYMBOL_GPL(iommu_attach_device_pasid);
+
+/**
+ * iommu_replace_device_pasid - replace the domain that a pasid is attached to
+ * @domain: new IOMMU domain to replace with
+ * @dev: the physical device
+ * @pasid: pasid that will be attached to the new domain
+ *
+ * This API allows the pasid to switch domains. Return 0 on success, or an
+ * error. The pasid will roll back to use the old domain if failure. The
+ * caller could call iommu_detach_device_pasid() before free the old domain
+ * in order to avoid use-after-free case.
+ */
+int iommu_replace_device_pasid(struct iommu_domain *domain,
+			       struct device *dev, ioasid_t pasid)
+{
+	/* Caller must be a probed driver on dev */
+	return __iommu_attach_device_pasid(domain, dev, pasid, true);
+}
+EXPORT_SYMBOL_NS_GPL(iommu_replace_device_pasid, IOMMUFD_INTERNAL);
 
 /*
  * iommu_detach_device_pasid() - Detach the domain from pasid of device
