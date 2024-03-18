@@ -136,6 +136,7 @@ void iommufd_device_destroy(struct iommufd_object *obj)
 	struct iommufd_device *idev =
 		container_of(obj, struct iommufd_device, obj);
 
+	WARN_ON(!xa_empty(&idev->pasid_hwpts));
 	iommu_device_release_dma_owner(idev->dev);
 	iommufd_put_group(idev->igroup);
 	if (!iommufd_selftest_is_mock_dev(idev->dev))
@@ -216,6 +217,8 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 	/* igroup refcount moves into iommufd_device */
 	idev->igroup = igroup;
 	mutex_init(&idev->iopf_lock);
+
+	xa_init(&idev->pasid_hwpts);
 
 	/*
 	 * If the caller fails after this success it must call
@@ -354,14 +357,17 @@ iommufd_device_attach_reserved_iova(struct iommufd_device *idev,
 
 /* The device attach/detach/replace helpers for attach_handle */
 
-static int iommufd_hwpt_attach_device(struct iommufd_hw_pagetable *hwpt,
-				      struct iommufd_device *idev,
-				      ioasid_t pasid)
+int iommufd_hwpt_attach_device(struct iommufd_hw_pagetable *hwpt,
+			       struct iommufd_device *idev,
+			       ioasid_t pasid)
 {
 	struct iommufd_attach_handle *handle;
 	int rc;
 
 	lockdep_assert_held(&idev->igroup->lock);
+
+	if (pasid != IOMMU_NO_PASID && !hwpt->pasid_compat)
+		return -EINVAL;
 
 	handle = kzalloc(sizeof(*handle), GFP_KERNEL);
 	if (!handle)
@@ -374,9 +380,12 @@ static int iommufd_hwpt_attach_device(struct iommufd_hw_pagetable *hwpt,
 	}
 
 	handle->idev = idev;
-	WARN_ON(pasid != IOMMU_NO_PASID);
-	rc = iommu_attach_group_handle(hwpt->domain, idev->igroup->group,
-				       &handle->handle);
+	if (pasid == IOMMU_NO_PASID)
+		rc = iommu_attach_group_handle(hwpt->domain, idev->igroup->group,
+					       &handle->handle);
+	else
+		rc = iommu_attach_device_pasid_handle(hwpt->domain, idev->dev,
+						      pasid, &handle->handle);
 	if (rc)
 		goto out_disable_iopf;
 
@@ -404,16 +413,19 @@ iommufd_device_get_attach_handle(struct iommufd_device *idev, ioasid_t pasid)
 	return to_iommufd_handle(handle);
 }
 
-static void iommufd_hwpt_detach_device(struct iommufd_hw_pagetable *hwpt,
-				       struct iommufd_device *idev,
-				       ioasid_t pasid)
+void iommufd_hwpt_detach_device(struct iommufd_hw_pagetable *hwpt,
+				struct iommufd_device *idev,
+				ioasid_t pasid)
 {
 	struct iommufd_attach_handle *handle;
 
-	WARN_ON(pasid != IOMMU_NO_PASID);
-
 	handle = iommufd_device_get_attach_handle(idev, pasid);
-	iommu_detach_group_handle(hwpt->domain, idev->igroup->group);
+
+	if (pasid == IOMMU_NO_PASID)
+		iommu_detach_group_handle(hwpt->domain, idev->igroup->group);
+	else
+		iommu_detach_device_pasid(hwpt->domain, idev->dev, pasid);
+
 	if (hwpt->fault) {
 		iommufd_auto_response_faults(hwpt, handle);
 		iommufd_fault_iopf_disable(idev);
@@ -421,15 +433,16 @@ static void iommufd_hwpt_detach_device(struct iommufd_hw_pagetable *hwpt,
 	kfree(handle);
 }
 
-static int iommufd_hwpt_replace_device(struct iommufd_device *idev,
-				       ioasid_t pasid,
-				       struct iommufd_hw_pagetable *hwpt,
-				       struct iommufd_hw_pagetable *old)
+int iommufd_hwpt_replace_device(struct iommufd_device *idev,
+				ioasid_t pasid,
+				struct iommufd_hw_pagetable *hwpt,
+				struct iommufd_hw_pagetable *old)
 {
 	struct iommufd_attach_handle *handle, *old_handle;
 	int rc;
 
-	WARN_ON(pasid != IOMMU_NO_PASID);
+	if (pasid != IOMMU_NO_PASID && !hwpt->pasid_compat)
+		return -EINVAL;
 
 	old_handle = iommufd_device_get_attach_handle(idev, pasid);
 
@@ -444,8 +457,12 @@ static int iommufd_hwpt_replace_device(struct iommufd_device *idev,
 	}
 
 	handle->idev = idev;
-	rc = iommu_replace_group_handle(idev->igroup->group, hwpt->domain,
-					&handle->handle);
+	if (pasid == IOMMU_NO_PASID)
+		rc = iommu_replace_group_handle(idev->igroup->group, hwpt->domain,
+						&handle->handle);
+	else
+		rc = iommu_replace_device_pasid_handle(hwpt->domain, idev->dev,
+						       pasid, &handle->handle);
 	if (rc)
 		goto out_disable_iopf;
 
@@ -649,10 +666,6 @@ err_unlock:
 	return ERR_PTR(rc);
 }
 
-typedef struct iommufd_hw_pagetable *(*attach_fn)(
-	struct iommufd_device *idev, ioasid_t pasid,
-	struct iommufd_hw_pagetable *hwpt);
-
 /*
  * When automatically managing the domains we search for a compatible domain in
  * the iopt and if one is found use it, otherwise create a new domain.
@@ -736,9 +749,8 @@ out_unlock:
 	return destroy_hwpt;
 }
 
-static int iommufd_device_change_pt(struct iommufd_device *idev,
-				    ioasid_t pasid,
-				    u32 *pt_id, attach_fn do_attach)
+int iommufd_device_change_pt(struct iommufd_device *idev, ioasid_t pasid,
+			     u32 *pt_id, attach_fn do_attach)
 {
 	struct iommufd_hw_pagetable *destroy_hwpt;
 	struct iommufd_object *pt_obj;
