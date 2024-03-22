@@ -43,4 +43,8 @@ void iommu_detach_group_handle(struct iommu_domain *domain,
 int iommu_replace_group_handle(struct iommu_group *group,
 			       struct iommu_domain *new_domain,
 			       struct iommu_attach_handle *handle);
+
+int iommu_replace_device_pasid_handle(struct iommu_domain *domain,
+				      struct device *dev, ioasid_t pasid,
+				      struct iommu_attach_handle *handle);
 #endif /* __LINUX_IOMMU_PRIV_H */
