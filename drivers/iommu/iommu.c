@@ -368,9 +368,9 @@ static bool dev_has_iommu(struct device *dev)
 	return dev->iommu && dev->iommu->iommu_dev;
 }
 
-static u32 dev_iommu_get_max_pasids(struct device *dev)
+static void dev_iommu_set_max_pasids(struct device *dev)
 {
-	u32 max_pasids = 0, bits = 0;
+	u32 max_pasids = dev->iommu->max_pasids, bits = 0;
 	int ret;
 
 	if (dev_is_pci(dev)) {
@@ -383,7 +383,8 @@ static u32 dev_iommu_get_max_pasids(struct device *dev)
 			max_pasids = 1UL << bits;
 	}
 
-	return min_t(u32, max_pasids, dev->iommu->iommu_dev->max_pasids);
+	dev->iommu->max_pasids = min_t(u32, max_pasids,
+				       dev->iommu->iommu_dev->max_pasids);
 }
 
 void dev_iommu_priv_set(struct device *dev, void *priv)
@@ -433,7 +434,7 @@ static int iommu_init_device(struct device *dev, const struct iommu_ops *ops)
 	}
 	dev->iommu_group = group;
 
-	dev->iommu->max_pasids = dev_iommu_get_max_pasids(dev);
+	dev_iommu_set_max_pasids(dev);
 	if (ops->is_attach_deferred)
 		dev->iommu->attach_deferred = ops->is_attach_deferred(dev);
 	return 0;
