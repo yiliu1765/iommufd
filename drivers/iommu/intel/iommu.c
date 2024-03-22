@@ -4646,6 +4646,10 @@ static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
 	if (context_copied(iommu, info->bus, info->devfn))
 		return -EBUSY;
 
+	/* Block old translation */
+	if (old)
+		intel_iommu_remove_dev_pasid(dev, pasid, old);
+
 	ret = prepare_domain_attach_device(domain, dev);
 	if (ret)
 		return ret;
