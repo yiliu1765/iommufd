@@ -4407,13 +4407,11 @@ static int intel_iommu_iotlb_sync_map(struct iommu_domain *domain,
 	return 0;
 }
 
-static void intel_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid,
-					 struct iommu_domain *domain)
+static void __intel_iommu_remove_dev_pasid(struct intel_iommu *iommu,
+					   struct device *dev, ioasid_t pasid,
+					   struct dmar_domain *dmar_domain)
 {
-	struct device_domain_info *info = dev_iommu_priv_get(dev);
-	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
 	struct dev_pasid_info *curr, *dev_pasid = NULL;
-	struct intel_iommu *iommu = info->iommu;
 	unsigned long flags;
 
 	spin_lock_irqsave(&dmar_domain->lock, flags);
@@ -4435,29 +4433,13 @@ static void intel_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid,
 	intel_drain_pasid_prq(dev, pasid);
 }
 
-static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
-				     struct device *dev, ioasid_t pasid,
-				     struct iommu_domain *old)
+static int __intel_iommu_set_dev_pasid(struct intel_iommu *iommu,
+				       struct device *dev, ioasid_t pasid,
+				       struct dmar_domain *dmar_domain)
 {
-	struct device_domain_info *info = dev_iommu_priv_get(dev);
-	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
-	struct intel_iommu *iommu = info->iommu;
 	struct dev_pasid_info *dev_pasid;
 	unsigned long flags;
 	int ret;
-
-	if (!pasid_supported(iommu) || dev_is_real_dma_subdevice(dev))
-		return -EOPNOTSUPP;
-
-	if (domain->dirty_ops)
-		return -EINVAL;
-
-	if (context_copied(iommu, info->bus, info->devfn))
-		return -EBUSY;
-
-	ret = prepare_domain_attach_device(domain, dev);
-	if (ret)
-		return ret;
 
 	dev_pasid = kzalloc(sizeof(*dev_pasid), GFP_KERNEL);
 	if (!dev_pasid)
@@ -4488,7 +4470,7 @@ static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
 	list_add(&dev_pasid->link_domain, &dmar_domain->dev_pasids);
 	spin_unlock_irqrestore(&dmar_domain->lock, flags);
 
-	if (domain->type & __IOMMU_DOMAIN_PAGING)
+	if (dmar_domain->domain.type & __IOMMU_DOMAIN_PAGING)
 		intel_iommu_debugfs_create_dev_pasid(dev_pasid);
 
 	return 0;
@@ -4498,6 +4480,50 @@ out_detach_iommu:
 	domain_detach_iommu(dmar_domain, iommu);
 out_free:
 	kfree(dev_pasid);
+	return ret;
+}
+
+static void intel_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid,
+					 struct iommu_domain *domain)
+{
+	struct device_domain_info *info = dev_iommu_priv_get(dev);
+
+	__intel_iommu_remove_dev_pasid(info->iommu, dev, pasid,
+				       to_dmar_domain(domain));
+}
+
+static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
+				     struct device *dev, ioasid_t pasid,
+				     struct iommu_domain *old)
+{
+	struct device_domain_info *info = dev_iommu_priv_get(dev);
+	struct intel_iommu *iommu = info->iommu;
+	int ret;
+
+	if (!pasid_supported(iommu) || dev_is_real_dma_subdevice(dev))
+		return -EOPNOTSUPP;
+
+	if (domain->dirty_ops)
+		return -EINVAL;
+
+	if (context_copied(iommu, info->bus, info->devfn))
+		return -EBUSY;
+
+	ret = prepare_domain_attach_device(domain, dev);
+	if (ret)
+		return ret;
+
+	/* Block old translation */
+	if (old)
+		__intel_iommu_remove_dev_pasid(iommu, dev, pasid,
+					       to_dmar_domain(old));
+
+	ret = __intel_iommu_set_dev_pasid(iommu, dev, pasid,
+					  to_dmar_domain(domain));
+	if (ret && old)
+		/* Rollback to the prior old domain, it should succeed */
+		WARN_ON(__intel_iommu_set_dev_pasid(iommu, dev, pasid,
+						    to_dmar_domain(old)));
 	return ret;
 }
 
