@@ -751,8 +751,13 @@ int iommufd_device_attach(struct iommufd_device *idev, u32 *pt_id)
 {
 	int rc;
 
-	rc = iommufd_device_change_pt(idev, IOMMU_PASID_INVALID, pt_id,
-				      &iommufd_device_do_attach);
+	if (idev->igroup)
+		rc = iommufd_device_change_pt(idev, IOMMU_PASID_INVALID,
+					      pt_id,
+					      &iommufd_device_do_attach);
+	else
+		/* SIOV virtual device follows generic pasid attach flow */
+		rc = iommufd_device_pasid_attach(idev, idev->rid_pasid, pt_id);
 	if (rc)
 		return rc;
 
@@ -782,8 +787,13 @@ EXPORT_SYMBOL_NS_GPL(iommufd_device_attach, IOMMUFD);
  */
 int iommufd_device_replace(struct iommufd_device *idev, u32 *pt_id)
 {
-	return iommufd_device_change_pt(idev, IOMMU_PASID_INVALID, pt_id,
-					&iommufd_device_do_replace);
+	if (idev->igroup)
+		return iommufd_device_change_pt(idev, IOMMU_PASID_INVALID,
+						pt_id,
+						&iommufd_device_do_replace);
+	else
+		/* SIOV virtual device follows generic pasid replace flow */
+		return iommufd_device_pasid_replace(idev, idev->rid_pasid, pt_id);
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_device_replace, IOMMUFD);
 
@@ -798,8 +808,12 @@ void iommufd_device_detach(struct iommufd_device *idev)
 {
 	struct iommufd_hw_pagetable *hwpt;
 
-	hwpt = iommufd_hw_pagetable_detach(idev);
-	iommufd_hw_pagetable_put(idev->ictx, hwpt);
+	if (idev->igroup) {
+		hwpt = iommufd_hw_pagetable_detach(idev);
+		iommufd_hw_pagetable_put(idev->ictx, hwpt);
+	} else {
+		iommufd_device_pasid_detach(idev, idev->rid_pasid);
+	}
 	refcount_dec(&idev->obj.users);
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_device_detach, IOMMUFD);
