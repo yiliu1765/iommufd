@@ -1999,7 +1999,8 @@ struct iommu_domain *iommu_user_domain_alloc(struct device *dev, u32 flags)
 
 		domain->type = IOMMU_DOMAIN_UNMANAGED;
 		domain->owner = ops;
-		domain->pgsize_bitmap = ops->pgsize_bitmap;
+		if (!domain->pgsize_bitmap)
+			domain->pgsize_bitmap = ops->pgsize_bitmap;
 		domain->ops = ops->default_domain_ops;
 
 		return domain;
