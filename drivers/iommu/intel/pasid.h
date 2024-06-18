@@ -98,6 +98,26 @@ static inline void pasid_clear_entry(struct pasid_entry *pe)
 	WRITE_ONCE(pe->val[7], 0);
 }
 
+static inline void pasid_set_entry(struct pasid_entry *pte,
+				   struct pasid_entry *new)
+{
+	u64 old[2];
+
+	for (int i = 0; i < 4; i++) {
+		u128 *ptr = (u128 *)&new->val[2*i];
+
+		old[0] = READ_ONCE(pte->val[2*i]);
+		old[1] = READ_ONCE(pte->val[2*i+1]);
+		WARN_ON(!try_cmpxchg128((u128 *)&pte->val[2*i], (u128 *)&old, *ptr));
+	}
+}
+
+static inline bool pasid_entry_empty(struct pasid_entry *pe)
+{
+	return !(pe->val[0] || pe->val[1] || pe->val[2] || pe->val[3] ||
+	         pe->val[4] || pe->val[5] || pe->val[6] || pe->val[7]);
+}
+
 static inline void pasid_clear_entry_with_fpd(struct pasid_entry *pe)
 {
 	WRITE_ONCE(pe->val[0], PASID_PTE_FPD);
