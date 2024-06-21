@@ -175,8 +175,12 @@ static void intel_mm_release(struct mmu_notifier *mn, struct mm_struct *mm)
 	spin_lock_irqsave(&domain->lock, flags);
 	list_for_each_entry(dev_pasid, &domain->dev_pasids, link_domain) {
 		info = dev_iommu_priv_get(dev_pasid->dev);
+		/*
+		 * PRQ drain would happen in the remove_dev_pasid() path,
+		 * no need to do it here.
+		 */
 		intel_pasid_tear_down_entry(info->iommu, dev_pasid->dev,
-					    dev_pasid->pasid, true);
+					    dev_pasid->pasid, true, false);
 	}
 	spin_unlock_irqrestore(&domain->lock, flags);
 
