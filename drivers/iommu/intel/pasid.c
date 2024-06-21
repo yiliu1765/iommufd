@@ -233,8 +233,12 @@ devtlb_invalidation_with_pasid(struct intel_iommu *iommu,
 		qi_flush_dev_iotlb_pasid(iommu, sid, pfsid, pasid, qdep, 0, 64 - VTD_PAGE_SHIFT);
 }
 
+/*
+ * Not all PASID entry destroy requires PRQ drain as it can be handled in
+ * the remove_dev_pasid path. Caller should be clear on it.
+ */
 void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
-				 u32 pasid, bool fault_ignore)
+				 u32 pasid, bool fault_ignore, bool drain_prq)
 {
 	struct pasid_entry *pte;
 	u16 did, pgtt;
@@ -264,6 +268,9 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 	/* Device IOTLB doesn't need to be flushed in caching mode. */
 	if (!cap_caching_mode(iommu->cap))
 		devtlb_invalidation_with_pasid(iommu, dev, pasid);
+
+	if (drain_prq)
+		intel_drain_pasid_prq(dev, pasid);
 }
 
 /*
