@@ -806,5 +806,7 @@ void intel_iommu_debugfs_create_dev_pasid(struct dev_pasid_info *dev_pasid)
 /* Remove the device pasid debugfs directory. */
 void intel_iommu_debugfs_remove_dev_pasid(struct dev_pasid_info *dev_pasid)
 {
+	if (!dev_pasid->debugfs_dentry)
+		return;
 	debugfs_remove_recursive(dev_pasid->debugfs_dentry);
 }
