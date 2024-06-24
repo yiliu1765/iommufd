@@ -637,6 +637,9 @@ static int arm_smmu_sva_set_dev_pasid(struct iommu_domain *domain,
 	int ret = 0;
 	struct mm_struct *mm = domain->mm;
 
+	if (old)
+		return -EOPNOTSUPP;
+
 	if (mm_get_enqcmd_pasid(mm) != id)
 		return -EINVAL;
 
