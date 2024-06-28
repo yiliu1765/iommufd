@@ -3321,6 +3321,9 @@ static struct dmar_domain *paging_domain_alloc(struct device *dev, bool first_st
 	domain->iommu_superpage = iommu_superpage_capability(iommu, first_stage);
 	domain->domain.pgsize_bitmap |= domain_super_pgsize_bitmap(domain);
 
+	domain->domain.owner = &intel_iommu_ops;
+	domain->domain.ops = intel_iommu_ops.default_domain_ops;
+
 	/*
 	 * IOVA aperture: First-level translation restricts the input-address
 	 * to a canonical address (i.e., address bits 63:N have the same value
@@ -3377,6 +3380,7 @@ intel_iommu_domain_alloc_user(struct device *dev, u32 flags,
 	if (IS_ERR(dmar_domain))
 		return ERR_CAST(dmar_domain);
 	domain = &dmar_domain->domain;
+	domain->type = IOMMU_DOMAIN_UNMANAGED;
 
 	if (nested_parent) {
 		dmar_domain->nested_parent = true;
