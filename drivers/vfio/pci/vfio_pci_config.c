@@ -1513,6 +1513,40 @@ static int vfio_fill_vconfig_bytes(struct vfio_pci_core_device *vdev,
 	return ret;
 }
 
+/* Fill data to vconfig */
+static void
+vfio_fill_customized_vconfig_bytes(struct vfio_pci_core_device *vdev,
+				   int offset, uint8_t *data, int size)
+{
+	int filled = 0;
+
+	while (size) {
+		if (size >= 4 && !(offset % 4)) {
+			__le32 *dwordp = (__le32 *)&vdev->vconfig[offset];
+			u32 dword;
+
+			memcpy(&dword, data + filled, 4);
+			*dwordp = cpu_to_le32(dword);
+			filled = 4;
+		} else if (size >= 2 && !(offset % 2)) {
+			__le16 *wordp = (__le16 *)&vdev->vconfig[offset];
+			u16 word;
+
+			memcpy(&word, data + filled, 2);
+			*wordp = cpu_to_le16(word);
+			filled = 2;
+		} else {
+			u8 *byte = &vdev->vconfig[offset];
+
+			memcpy(byte, data + filled, 1);
+			filled = 1;
+		}
+
+		offset += filled;
+		size -= filled;
+	}
+}
+
 static int vfio_cap_init(struct vfio_pci_core_device *vdev)
 {
 	struct pci_dev *pdev = vdev->pdev;
@@ -1606,6 +1640,78 @@ static int vfio_cap_init(struct vfio_pci_core_device *vdev)
 	return 0;
 }
 
+#ifdef CONFIG_PCI_PASID
+static void vfio_pci_make_pasid_cap(struct pci_dev *pdev, u16 *pasid_cap)
+{
+	u32 *vheader = (u32 *)&pasid_cap[0];
+	u16 *vcaps = &pasid_cap[2];
+	u32 pcaps;
+	u16 pctrl;
+
+	pci_read_config_dword(pdev, pdev->pasid_cap + PCI_PASID_CAP, &pcaps);
+	pci_read_config_word(pdev, pdev->pasid_cap + PCI_PASID_CTRL, &pctrl);
+
+	*vcaps = pcaps & PCI_PASID_CAP_WIDTH;
+
+	if (pctrl & PCI_PASID_CTRL_EXEC)
+		*vcaps |= PCI_PASID_CAP_EXEC;
+	if (pctrl & PCI_PASID_CTRL_PRIV)
+		*vcaps |= PCI_PASID_CAP_PRIV;
+
+	/* This only supports v1 pasid cap */
+	*vheader = PCI_EXT_CAP_ID_PASID | 1 << 16;
+}
+
+static int vfio_pci_add_pasid_cap(struct vfio_pci_core_device *vdev,
+				  __le32 *prev)
+{
+	struct pci_dev *pdev = vdev->pdev;
+	u8 *map = vdev->pci_config_map;
+	u16 epos, vpasid_cap[4] = {};
+	int len = PCI_EXT_CAP_PASID_SIZEOF;
+	int i;
+
+	/* VF shares the PASID capability of its PF */
+	if (pdev->is_virtfn) {
+		pdev = pci_physfn(pdev);
+		//TBD: VF should get the epos from a lookup table
+	}
+
+	if (!pdev->pasid_enabled)
+		return 0;
+
+	/*
+	 * For PF, locates the vPASID cap at the offset of the pPASID cap.
+	 * For VF, needs to get it from a lookup table.
+	 */
+	epos = pdev->pasid_cap;
+	epos = 0xfd0;
+
+	/* Check if any bits in the range are in use */
+	for (i = 0; i < len; i++) {
+		if (unlikely(map[epos + i] != PCI_CAP_ID_INVALID))
+			return -EBUSY;
+	}
+
+	vfio_pci_make_pasid_cap(pdev, &vpasid_cap[0]);
+
+	memset(map + epos, PCI_EXT_CAP_ID_PASID, len);
+	vfio_fill_customized_vconfig_bytes(vdev, epos,
+					   (u8 *)&vpasid_cap, len);
+
+	/* Update the next offset in the previous cap header */
+	*prev &= cpu_to_le32(~(0xffcU << 20));
+	*prev |= cpu_to_le32(epos << 20);
+	return 0;
+}
+#else
+static int vfio_pci_add_pasid_cap(struct vfio_pci_core_device *vdev,
+				  __le32 *prev)
+{
+	return -EOPNOTSUPP;
+}
+#endif
+
 static int vfio_ecap_init(struct vfio_pci_core_device *vdev)
 {
 	struct pci_dev *pdev = vdev->pdev;
@@ -1698,6 +1804,11 @@ static int vfio_ecap_init(struct vfio_pci_core_device *vdev)
 		epos = PCI_EXT_CAP_NEXT(header);
 	}
 
+	ret = vfio_pci_add_pasid_cap(vdev, prev);
+	if (ret)
+		return ret;
+	ecaps++;
+ 
 	if (!ecaps)
 		*(u32 *)&vdev->vconfig[PCI_CFG_SPACE_SIZE] = 0;
 
@@ -1892,7 +2003,8 @@ static ssize_t vfio_config_do_rw(struct vfio_pci_core_device *vdev, char __user 
 	if (cap_id == PCI_CAP_ID_INVALID) {
 		perm = &unassigned_perms;
 		cap_start = *ppos;
-	} else if (cap_id == PCI_CAP_ID_INVALID_VIRT) {
+	} else if (cap_id == PCI_CAP_ID_INVALID_VIRT ||
+		   cap_id == PCI_EXT_CAP_ID_PASID) {
 		perm = &virt_perms;
 		cap_start = *ppos;
 	} else {

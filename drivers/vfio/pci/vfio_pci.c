@@ -152,9 +152,10 @@ static int vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	struct vfio_pci_core_device *vdev;
 	int ret;
-
+#if 0
 	if (vfio_pci_is_denylisted(pdev))
 		return -EINVAL;
+#endif
 
 	vdev = vfio_alloc_device(vfio_pci_core_device, vdev, &pdev->dev,
 				 &vfio_pci_ops);

@@ -3267,6 +3267,7 @@ static int blocking_domain_attach_dev(struct iommu_domain *domain,
 				      struct device *dev)
 {
 	device_block_translation(dev);
+	iommu_enable_pci_caps(dev_iommu_priv_get(dev));
 	return 0;
 }
 
