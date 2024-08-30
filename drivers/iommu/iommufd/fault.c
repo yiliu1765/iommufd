@@ -150,30 +150,20 @@ static int __fault_domain_replace_dev(struct iommufd_device *idev,
 				      struct iommufd_hw_pagetable *hwpt,
 				      struct iommufd_hw_pagetable *old)
 {
-	struct iommufd_attach_handle *handle, *curr = NULL;
+	struct iommufd_attach_handle *handle;
 	int ret;
 
-	if (old->fault)
-		curr = iommufd_device_get_attach_handle(idev);
+	handle = kzalloc(sizeof(*handle), GFP_KERNEL);
+	if (!handle)
+		return -ENOMEM;
 
-	if (hwpt->fault) {
-		handle = kzalloc(sizeof(*handle), GFP_KERNEL);
-		if (!handle)
-			return -ENOMEM;
+	handle->handle.domain = hwpt->domain;
+	handle->idev = idev;
 
-		handle->handle.domain = hwpt->domain;
-		handle->idev = idev;
-		ret = iommu_replace_group_handle(idev->igroup->group,
-						 hwpt->domain, &handle->handle);
-	} else {
-		ret = iommu_replace_group_handle(idev->igroup->group,
-						 hwpt->domain, NULL);
-	}
-
-	if (!ret && curr) {
-		iommufd_auto_response_faults(old, curr);
-		kfree(curr);
-	}
+	ret = iommu_replace_group_handle(idev->igroup->group,
+					 hwpt->domain, &handle->handle);
+	if (ret)
+		kfree(handle);
 
 	return ret;
 }
@@ -186,6 +176,9 @@ int iommufd_fault_domain_replace_dev(struct iommufd_device *idev,
 	bool iopf_on = hwpt->fault && !old->fault;
 	int ret;
 
+	if (!hwpt->fault)
+		return -EINVAL;
+
 	if (iopf_on) {
 		ret = iommufd_fault_iopf_enable(idev);
 		if (ret)
@@ -197,6 +190,14 @@ int iommufd_fault_domain_replace_dev(struct iommufd_device *idev,
 		if (iopf_on)
 			iommufd_fault_iopf_disable(idev);
 		return ret;
+	}
+
+	if (old->fault) {
+		struct iommufd_attach_handle *curr = NULL;
+
+		curr = iommufd_device_get_attach_handle(idev);
+		iommufd_auto_response_faults(old, curr);
+		kfree(curr);
 	}
 
 	if (iopf_off)
