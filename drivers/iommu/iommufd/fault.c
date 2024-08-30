@@ -132,21 +132,17 @@ int iommufd_fault_domain_replace_dev(struct iommufd_device *idev,
 
 	curr = iommufd_device_get_attach_handle(idev);
 
-	if (hwpt->fault)
-		ret = iommufd_dev_replace_handle(idev, hwpt, old);
-	else
-		ret = iommu_replace_group_handle(idev->igroup->group,
-						 hwpt->domain, NULL);
+	ret = iommufd_dev_replace_handle(idev, hwpt, old);
 	if (ret) {
 		if (iopf_on)
 			iommufd_fault_iopf_disable(idev);
 		return ret;
 	}
 
-	if (curr) {
+	if (old->fault)
 		iommufd_auto_response_faults(old, curr);
-		kfree(curr);
-	}
+
+	kfree(curr);
 
 	if (iopf_off)
 		iommufd_fault_iopf_disable(idev);
