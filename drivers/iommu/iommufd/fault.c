@@ -121,7 +121,7 @@ int iommufd_fault_domain_replace_dev(struct iommufd_device *idev,
 {
 	bool iopf_off = !hwpt->fault && old->fault;
 	bool iopf_on = hwpt->fault && !old->fault;
-	struct iommufd_attach_handle *curr = NULL;
+	struct iommufd_attach_handle *curr;
 	int ret;
 
 	if (iopf_on) {
@@ -130,24 +130,17 @@ int iommufd_fault_domain_replace_dev(struct iommufd_device *idev,
 			return ret;
 	}
 
-	if (hwpt->fault) {
-		curr = iommufd_dev_replace_handle(idev, hwpt, old);
-		ret = IS_ERR(curr) ? PTR_ERR(curr) : 0;
-	} else {
-		ret = iommu_replace_group_handle(idev->igroup->group,
-						 hwpt->domain, NULL);
-	}
-
-	if (ret) {
+	curr = iommufd_dev_replace_handle(idev, hwpt, old);
+	if (IS_ERR(curr)) {
 		if (iopf_on)
 			iommufd_fault_iopf_disable(idev);
-		return ret;
+		return PTR_ERR(curr);
 	}
 
-	if (curr) {
+	if (old->fault)
 		iommufd_auto_response_faults(old, curr);
-		kfree(curr);
-	}
+
+	kfree(curr);
 
 	if (iopf_off)
 		iommufd_fault_iopf_disable(idev);
