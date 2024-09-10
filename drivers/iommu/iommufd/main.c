@@ -547,6 +547,7 @@ static int __init iommufd_init(void)
 {
 	int ret;
 
+	printk("%s offsetofend(_struct, _last): %lu\n", __func__, offsetofend(struct iommu_hw_info, __reserved));
 	ret = misc_register(&iommu_misc_dev);
 	if (ret)
 		return ret;
