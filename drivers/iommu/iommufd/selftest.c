@@ -906,6 +906,8 @@ static struct mock_dev *mock_dev_create(unsigned long dev_flags)
 	const u32 valid_flags = MOCK_FLAGS_DEVICE_NO_DIRTY |
 				MOCK_FLAGS_DEVICE_HUGE_IOVA |
 				MOCK_FLAGS_DEVICE_PASID;
+	struct iommu_fwspec *fwspec;
+	struct dev_iommu *param;
 	struct mock_dev *mdev;
 	int rc, i;
 
@@ -917,10 +919,29 @@ static struct mock_dev *mock_dev_create(unsigned long dev_flags)
 		return ERR_PTR(-ENOMEM);
 
 	init_rwsem(&mdev->viommu_rwsem);
+
+	/* fwspec and param will be freed in the iommu core */
+	fwspec = kzalloc(sizeof(*fwspec), GFP_KERNEL);
+	if (!fwspec) {
+		kfree(mdev);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	fwspec->iommu_fwnode = mock_iommu.iommu_dev.fwnode;
+	param = kzalloc(sizeof(*param), GFP_KERNEL);
+	if (!param) {
+		kfree(mdev);
+		kfree(fwspec);
+		return ERR_PTR(-ENOMEM);
+	}
+	mutex_init(&param->lock);
+	param->fwspec = fwspec;
+
 	device_initialize(&mdev->dev);
 	mdev->flags = dev_flags;
 	mdev->dev.release = mock_dev_release;
 	mdev->dev.bus = &iommufd_mock_bus_type.bus;
+	mdev->dev.iommu = param;
 	for (i = 0; i < MOCK_DEV_CACHE_NUM; i++)
 		mdev->cache[i] = IOMMU_TEST_DEV_CACHE_DEFAULT;
 
@@ -949,6 +970,8 @@ static struct mock_dev *mock_dev_create(unsigned long dev_flags)
 
 err_put:
 	put_device(&mdev->dev);
+	kfree(param);
+	kfree(fwspec);
 	return ERR_PTR(rc);
 }
 
@@ -1957,11 +1980,18 @@ int __init iommufd_test_init(void)
 	if (rc)
 		goto err_platform;
 
+	mock_iommu.iommu_dev.fwnode = kzalloc(sizeof(struct iommu_fwspec),
+					      GFP_KERNEL);
+	if (!mock_iommu.iommu_dev.fwnode) {
+		rc = -ENOMEM;
+		goto err_bus;
+	}
+
 	rc = iommu_device_sysfs_add(&mock_iommu.iommu_dev,
 				    &selftest_iommu_dev->dev, NULL, "%s",
 				    dev_name(&selftest_iommu_dev->dev));
 	if (rc)
-		goto err_bus;
+		goto err_fw;
 
 	rc = iommu_device_register_bus(&mock_iommu.iommu_dev, &mock_ops,
 				  &iommufd_mock_bus_type.bus,
@@ -1979,6 +2009,9 @@ int __init iommufd_test_init(void)
 
 err_sysfs:
 	iommu_device_sysfs_remove(&mock_iommu.iommu_dev);
+err_fw:
+	kfree(mock_iommu.iommu_dev.fwnode);
+	mock_iommu.iommu_dev.fwnode = NULL;
 err_bus:
 	bus_unregister(&iommufd_mock_bus_type.bus);
 err_platform:
@@ -2016,6 +2049,8 @@ void iommufd_test_exit(void)
 	iommu_device_unregister_bus(&mock_iommu.iommu_dev,
 				    &iommufd_mock_bus_type.bus,
 				    &iommufd_mock_bus_type.nb);
+	kfree(mock_iommu.iommu_dev.fwnode);
+	mock_iommu.iommu_dev.fwnode = NULL;
 	bus_unregister(&iommufd_mock_bus_type.bus);
 	platform_device_unregister(selftest_iommu_dev);
 	debugfs_remove_recursive(dbgfs_root);
