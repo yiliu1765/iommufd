@@ -162,21 +162,34 @@ void vfio_df_unbind_iommufd(struct vfio_device_file *df)
 int vfio_df_ioctl_attach_pt(struct vfio_device_file *df,
 			    struct vfio_device_attach_iommufd_pt __user *arg)
 {
-	struct vfio_device *device = df->device;
+	unsigned long minsz = offsetofend(
+			struct vfio_device_attach_iommufd_pt, pt_id);
 	struct vfio_device_attach_iommufd_pt attach;
-	unsigned long minsz;
+	struct vfio_device *device = df->device;
+	u32 user_size;
 	int ret;
 
-	minsz = offsetofend(struct vfio_device_attach_iommufd_pt, pt_id);
+	ret = get_user(user_size, (u32 __user *)arg);
+	if (ret)
+		return ret;
 
-	if (copy_from_user(&attach, arg, minsz))
-		return -EFAULT;
+	ret = copy_struct_from_user(&attach, sizeof(attach), arg, user_size);
+	if (ret)
+		return ret;
 
-	if (attach.argsz < minsz || attach.flags)
+	if (attach.argsz < minsz || attach.flags & (~VFIO_DEVICE_ATTACH_PASID))
 		return -EINVAL;
 
+	if ((attach.flags & VFIO_DEVICE_ATTACH_PASID) &&
+	    !device->ops->pasid_attach_ioas)
+		return -EOPNOTSUPP;
+
 	mutex_lock(&device->dev_set->lock);
-	ret = device->ops->attach_ioas(device, &attach.pt_id);
+	if (attach.flags & VFIO_DEVICE_ATTACH_PASID)
+		ret = device->ops->pasid_attach_ioas(device, attach.pasid,
+						     &attach.pt_id);
+	else
+		ret = device->ops->attach_ioas(device, &attach.pt_id);
 	if (ret)
 		goto out_unlock;
 
@@ -198,20 +211,33 @@ out_unlock:
 int vfio_df_ioctl_detach_pt(struct vfio_device_file *df,
 			    struct vfio_device_detach_iommufd_pt __user *arg)
 {
-	struct vfio_device *device = df->device;
+	unsigned long minsz =
+		offsetofend(struct vfio_device_detach_iommufd_pt, flags);
 	struct vfio_device_detach_iommufd_pt detach;
-	unsigned long minsz;
+	struct vfio_device *device = df->device;
+	u32 user_size;
+	int ret;
 
-	minsz = offsetofend(struct vfio_device_detach_iommufd_pt, flags);
+	ret = get_user(user_size, (u32 __user *)arg);
+	if (ret)
+		return ret;
 
-	if (copy_from_user(&detach, arg, minsz))
-		return -EFAULT;
+	ret = copy_struct_from_user(&detach, sizeof(detach), arg, user_size);
+	if (ret)
+		return ret;
 
-	if (detach.argsz < minsz || detach.flags)
+	if (detach.argsz < minsz || detach.flags & (~VFIO_DEVICE_DETACH_PASID))
 		return -EINVAL;
 
+	if ((detach.flags & VFIO_DEVICE_DETACH_PASID) &&
+	    !device->ops->pasid_detach_ioas)
+		return -EOPNOTSUPP;
+
 	mutex_lock(&device->dev_set->lock);
-	device->ops->detach_ioas(device);
+	if (detach.flags & VFIO_DEVICE_DETACH_PASID)
+		device->ops->pasid_detach_ioas(device, detach.pasid);
+	else
+		device->ops->detach_ioas(device);
 	mutex_unlock(&device->dev_set->lock);
 
 	return 0;
