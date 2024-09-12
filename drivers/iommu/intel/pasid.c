@@ -236,8 +236,12 @@ devtlb_invalidation_with_pasid(struct intel_iommu *iommu,
 		qi_flush_dev_iotlb_pasid(iommu, sid, pfsid, pasid, qdep, 0, 64 - VTD_PAGE_SHIFT);
 }
 
+/*
+ * Caller can request to drain PRQ in this helper if it hasn't done so,
+ * e.g. in a path which doesn't follow remove_dev_pasid().
+ */
 void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
-				 u32 pasid, bool fault_ignore)
+				 u32 pasid, u32 flags)
 {
 	struct pasid_entry *pte;
 	u16 did, pgtt;
@@ -251,7 +255,8 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 
 	did = pasid_get_domain_id(pte);
 	pgtt = pasid_pte_get_pgtt(pte);
-	intel_pasid_clear_entry(dev, pasid, fault_ignore);
+	intel_pasid_clear_entry(dev, pasid,
+				flags & INTEL_PASID_TEARDOWN_IGNORE_FAULT);
 	spin_unlock(&iommu->lock);
 
 	if (!ecap_coherent(iommu->ecap))
@@ -265,6 +270,9 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 		iommu->flush.flush_iotlb(iommu, did, 0, 0, DMA_TLB_DSI_FLUSH);
 
 	devtlb_invalidation_with_pasid(iommu, dev, pasid);
+
+	if (flags & INTEL_PASID_TEARDOWN_DRAIN_PRQ)
+		intel_drain_pasid_prq(dev, pasid);
 }
 
 /*
