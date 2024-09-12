@@ -238,7 +238,8 @@ devtlb_invalidation_with_pasid(struct intel_iommu *iommu,
 
 /*
  * Caller can request to drain PRQ in this helper if it hasn't done so,
- * e.g. in a path which doesn't follow remove_dev_pasid().
+ * e.g. in a path which doesn't follow the set_dev_pasid() op of the
+ * blocked domain.
  * Return the pasid entry pointer if the entry is found or NULL if no
  * entry found.
  */
