@@ -1233,6 +1233,9 @@ void device_block_translation(struct device *dev);
 int domain_attach_device_sanitize(struct iommu_domain *domain,
 				  struct device *dev);
 void domain_update_iommu_cap(struct dmar_domain *domain);
+int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
+			      struct device *dev, ioasid_t pasid,
+			      struct iommu_domain *old);
 
 int dmar_ir_support(void);
 
