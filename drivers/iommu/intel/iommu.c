@@ -1908,7 +1908,7 @@ static void domain_context_clear_one(struct device_domain_info *info, u8 bus, u8
 static int domain_setup_first_level(struct intel_iommu *iommu,
 				    struct dmar_domain *domain,
 				    struct device *dev,
-				    u32 pasid)
+				    u32 pasid, struct iommu_domain *old)
 {
 	struct dma_pte *pgd = domain->pgd;
 	int agaw, level;
@@ -1936,7 +1936,7 @@ static int domain_setup_first_level(struct intel_iommu *iommu,
 
 	return intel_pasid_setup_first_level(iommu, dev, (pgd_t *)pgd, pasid,
 					     domain_id_iommu(domain, iommu),
-					     flags);
+					     flags, old);
 }
 
 static bool dev_is_real_dma_subdevice(struct device *dev)
@@ -1950,12 +1950,16 @@ static int dmar_domain_attach_device(struct dmar_domain *domain,
 {
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 	struct intel_iommu *iommu = info->iommu;
+	struct iommu_domain *old = NULL;
 	unsigned long flags;
 	int ret;
 
 	ret = domain_attach_iommu(domain, iommu);
 	if (ret)
 		return ret;
+
+	if (info->domain)
+		old = &info->domain->domain;
 
 	info->domain = domain;
 	spin_lock_irqsave(&domain->lock, flags);
@@ -1968,9 +1972,11 @@ static int dmar_domain_attach_device(struct dmar_domain *domain,
 	if (!sm_supported(iommu))
 		ret = domain_context_mapping(domain, dev);
 	else if (domain->use_first_level)
-		ret = domain_setup_first_level(iommu, domain, dev, IOMMU_NO_PASID);
+		ret = domain_setup_first_level(iommu, domain, dev,
+					       IOMMU_NO_PASID, old);
 	else
-		ret = intel_pasid_setup_second_level(iommu, domain, dev, IOMMU_NO_PASID);
+		ret = intel_pasid_setup_second_level(iommu, domain, dev,
+						     IOMMU_NO_PASID, old);
 
 	if (ret)
 		goto out_block_translation;
@@ -4322,10 +4328,10 @@ static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
 
 	if (dmar_domain->use_first_level)
 		ret = domain_setup_first_level(iommu, dmar_domain,
-					       dev, pasid);
+					       dev, pasid, old);
 	else
 		ret = intel_pasid_setup_second_level(iommu, dmar_domain,
-						     dev, pasid);
+						     dev, pasid, old);
 	if (ret)
 		goto out_unassign_tag;
 
@@ -4553,7 +4559,11 @@ static int identity_domain_attach_dev(struct iommu_domain *domain, struct device
 {
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 	struct intel_iommu *iommu = info->iommu;
+	struct iommu_domain *old = NULL;
 	int ret;
+
+	if (info->domain)
+		old = &info->domain->domain;
 
 	device_block_translation(dev);
 
@@ -4561,7 +4571,8 @@ static int identity_domain_attach_dev(struct iommu_domain *domain, struct device
 		return 0;
 
 	if (sm_supported(iommu)) {
-		ret = intel_pasid_setup_pass_through(iommu, dev, IOMMU_NO_PASID);
+		ret = intel_pasid_setup_pass_through(iommu, dev,
+						     IOMMU_NO_PASID, old);
 		if (!ret)
 			iommu_enable_pci_caps(info);
 	} else {
@@ -4581,7 +4592,7 @@ static int identity_domain_set_dev_pasid(struct iommu_domain *domain,
 	if (!pasid_supported(iommu) || dev_is_real_dma_subdevice(dev))
 		return -EOPNOTSUPP;
 
-	return intel_pasid_setup_pass_through(iommu, dev, pasid);
+	return intel_pasid_setup_pass_through(iommu, dev, pasid, old);
 }
 
 static struct iommu_domain identity_domain = {

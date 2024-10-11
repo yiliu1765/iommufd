@@ -301,7 +301,8 @@ static void pasid_flush_caches(struct intel_iommu *iommu,
  */
 int intel_pasid_setup_first_level(struct intel_iommu *iommu,
 				  struct device *dev, pgd_t *pgd,
-				  u32 pasid, u16 did, int flags)
+				  u32 pasid, u16 did, int flags,
+				  struct iommu_domain *old)
 {
 	struct pasid_entry *pte;
 
@@ -378,7 +379,8 @@ static int iommu_skip_agaw(struct dmar_domain *domain,
  */
 int intel_pasid_setup_second_level(struct intel_iommu *iommu,
 				   struct dmar_domain *domain,
-				   struct device *dev, u32 pasid)
+				   struct device *dev, u32 pasid,
+				   struct iommu_domain *old)
 {
 	struct pasid_entry *pte;
 	struct dma_pte *pgd;
@@ -509,7 +511,8 @@ int intel_pasid_setup_dirty_tracking(struct intel_iommu *iommu,
  * Set up the scalable mode pasid entry for passthrough translation type.
  */
 int intel_pasid_setup_pass_through(struct intel_iommu *iommu,
-				   struct device *dev, u32 pasid)
+				   struct device *dev, u32 pasid,
+				   struct iommu_domain *old)
 {
 	u16 did = FLPT_DEFAULT_DID;
 	struct pasid_entry *pte;
@@ -592,7 +595,8 @@ void intel_pasid_setup_page_snoop_control(struct intel_iommu *iommu,
  * set.
  */
 int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
-			     u32 pasid, struct dmar_domain *domain)
+			     u32 pasid, struct dmar_domain *domain,
+			     struct iommu_domain *old)
 {
 	struct iommu_hwpt_vtd_s1 *s1_cfg = &domain->s1_cfg;
 	pgd_t *s1_gpgd = (pgd_t *)(uintptr_t)domain->s1_pgtbl;

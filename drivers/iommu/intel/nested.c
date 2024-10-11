@@ -24,11 +24,14 @@ static int intel_nested_attach_dev(struct iommu_domain *domain,
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
 	struct intel_iommu *iommu = info->iommu;
+	struct iommu_domain *old = NULL;
 	unsigned long flags;
 	int ret = 0;
 
-	if (info->domain)
+	if (info->domain) {
+		old = &info->domain->domain;
 		device_block_translation(dev);
+	}
 
 	if (iommu->agaw < dmar_domain->s2_domain->agaw) {
 		dev_err_ratelimited(dev, "Adjusted guest address width not compatible\n");
@@ -57,7 +60,7 @@ static int intel_nested_attach_dev(struct iommu_domain *domain,
 		goto detach_iommu;
 
 	ret = intel_pasid_setup_nested(iommu, dev,
-				       IOMMU_NO_PASID, dmar_domain);
+				       IOMMU_NO_PASID, dmar_domain, old);
 	if (ret)
 		goto unassign_tag;
 

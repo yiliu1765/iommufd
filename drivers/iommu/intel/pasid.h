@@ -292,17 +292,21 @@ void intel_pasid_free_table(struct device *dev);
 struct pasid_table *intel_pasid_get_table(struct device *dev);
 int intel_pasid_setup_first_level(struct intel_iommu *iommu,
 				  struct device *dev, pgd_t *pgd,
-				  u32 pasid, u16 did, int flags);
+				  u32 pasid, u16 did, int flags,
+				  struct iommu_domain *old);
 int intel_pasid_setup_second_level(struct intel_iommu *iommu,
 				   struct dmar_domain *domain,
-				   struct device *dev, u32 pasid);
+				   struct device *dev, u32 pasid,
+				   struct iommu_domain *old);
 int intel_pasid_setup_dirty_tracking(struct intel_iommu *iommu,
 				     struct device *dev, u32 pasid,
 				     bool enabled);
 int intel_pasid_setup_pass_through(struct intel_iommu *iommu,
-				   struct device *dev, u32 pasid);
+				   struct device *dev, u32 pasid,
+				   struct iommu_domain *old);
 int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
-			     u32 pasid, struct dmar_domain *domain);
+			     u32 pasid, struct dmar_domain *domain,
+			     struct iommu_domain *old);
 
 #define INTEL_PASID_TEARDOWN_IGNORE_FAULT	(1U << 0)
 #define INTEL_PASID_TEARDOWN_DRAIN_PRQ		(1U << 1)
