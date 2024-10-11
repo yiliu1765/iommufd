@@ -321,18 +321,13 @@ int intel_pasid_setup_first_level(struct intel_iommu *iommu,
 		return -EINVAL;
 	}
 
-	spin_lock(&iommu->lock);
-	pte = intel_pasid_get_entry(dev, pasid);
-	if (!pte) {
-		spin_unlock(&iommu->lock);
+	/* Destroy the old configuration if it already exists */
+	pte = intel_pasid_tear_down_entry(iommu, dev, pasid,
+					  INTEL_PASID_TEARDOWN_DRAIN_PRQ);
+	if (!pte)
 		return -ENODEV;
-	}
 
-	if (pasid_pte_is_present(pte)) {
-		spin_unlock(&iommu->lock);
-		return -EBUSY;
-	}
-
+	spin_lock(&iommu->lock);
 	pasid_clear_entry(pte);
 
 	/* Setup the first level page table pointer: */
@@ -407,21 +402,16 @@ int intel_pasid_setup_second_level(struct intel_iommu *iommu,
 		return -EINVAL;
 	}
 
+	/* Destroy the old configuration if it already exists */
+	pte = intel_pasid_tear_down_entry(iommu, dev, pasid,
+					  INTEL_PASID_TEARDOWN_DRAIN_PRQ);
+	if (!pte)
+		return -ENODEV;
+
 	pgd_val = virt_to_phys(pgd);
 	did = domain_id_iommu(domain, iommu);
 
 	spin_lock(&iommu->lock);
-	pte = intel_pasid_get_entry(dev, pasid);
-	if (!pte) {
-		spin_unlock(&iommu->lock);
-		return -ENODEV;
-	}
-
-	if (pasid_pte_is_present(pte)) {
-		spin_unlock(&iommu->lock);
-		return -EBUSY;
-	}
-
 	pasid_clear_entry(pte);
 	pasid_set_domain_id(pte, did);
 	pasid_set_slptr(pte, pgd_val);
@@ -518,18 +508,13 @@ int intel_pasid_setup_pass_through(struct intel_iommu *iommu,
 	u16 did = FLPT_DEFAULT_DID;
 	struct pasid_entry *pte;
 
-	spin_lock(&iommu->lock);
-	pte = intel_pasid_get_entry(dev, pasid);
-	if (!pte) {
-		spin_unlock(&iommu->lock);
+	/* Destroy the old configuration if it already exists */
+	pte = intel_pasid_tear_down_entry(iommu, dev, pasid,
+					  INTEL_PASID_TEARDOWN_DRAIN_PRQ);
+	if (!pte)
 		return -ENODEV;
-	}
 
-	if (pasid_pte_is_present(pte)) {
-		spin_unlock(&iommu->lock);
-		return -EBUSY;
-	}
-
+	spin_lock(&iommu->lock);
 	pasid_clear_entry(pte);
 	pasid_set_domain_id(pte, did);
 	pasid_set_address_width(pte, iommu->agaw);
@@ -634,17 +619,13 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
 		return -EINVAL;
 	}
 
-	spin_lock(&iommu->lock);
-	pte = intel_pasid_get_entry(dev, pasid);
-	if (!pte) {
-		spin_unlock(&iommu->lock);
+	/* Destroy the old configuration if it already exists */
+	pte = intel_pasid_tear_down_entry(iommu, dev, pasid,
+					  INTEL_PASID_TEARDOWN_DRAIN_PRQ);
+	if (!pte)
 		return -ENODEV;
-	}
-	if (pasid_pte_is_present(pte)) {
-		spin_unlock(&iommu->lock);
-		return -EBUSY;
-	}
 
+	spin_lock(&iommu->lock);
 	pasid_clear_entry(pte);
 
 	if (s1_cfg->addr_width == ADDR_WIDTH_5LEVEL)
