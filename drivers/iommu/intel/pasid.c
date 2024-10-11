@@ -236,19 +236,14 @@ devtlb_invalidation_with_pasid(struct intel_iommu *iommu,
 		qi_flush_dev_iotlb_pasid(iommu, sid, pfsid, pasid, qdep, 0, 64 - VTD_PAGE_SHIFT);
 }
 
-/*
- * Caller can request to drain PRQ in this helper if it hasn't done so,
- * e.g. in a path which doesn't follow remove_dev_pasid().
- */
-void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
-				 u32 pasid, u32 flags)
+void __intel_pasid_tear_down_entry(struct intel_iommu *iommu,
+				   struct device *dev, u32 pasid,
+				   struct pasid_entry *pte, u32 flags)
 {
-	struct pasid_entry *pte;
 	u16 did, pgtt;
 
 	spin_lock(&iommu->lock);
-	pte = intel_pasid_get_entry(dev, pasid);
-	if (WARN_ON(!pte) || !pasid_pte_is_present(pte)) {
+	if (!pasid_pte_is_present(pte)) {
 		spin_unlock(&iommu->lock);
 		return;
 	}
@@ -273,6 +268,24 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 
 	if (flags & INTEL_PASID_TEARDOWN_DRAIN_PRQ)
 		intel_drain_pasid_prq(dev, pasid);
+}
+
+/*
+ * Caller can request to drain PRQ in this helper if it hasn't done so,
+ * e.g. in a path which doesn't follow remove_dev_pasid().
+ */
+void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
+				 u32 pasid, u32 flags)
+{
+	struct pasid_entry *pte;
+
+	spin_lock(&iommu->lock);
+	pte = intel_pasid_get_entry(dev, pasid);
+	spin_unlock(&iommu->lock);
+	if (WARN_ON(!pte))
+		return;
+
+	__intel_pasid_tear_down_entry(iommu, dev, pasid, pte, flags);
 }
 
 /*
@@ -318,16 +331,15 @@ int intel_pasid_setup_first_level(struct intel_iommu *iommu,
 
 	spin_lock(&iommu->lock);
 	pte = intel_pasid_get_entry(dev, pasid);
-	if (!pte) {
-		spin_unlock(&iommu->lock);
+	spin_unlock(&iommu->lock);
+	if (!pte)
 		return -ENODEV;
-	}
 
-	if (pasid_pte_is_present(pte)) {
-		spin_unlock(&iommu->lock);
-		return -EBUSY;
-	}
+	/* Destroy the old configuration if it already exists */
+	__intel_pasid_tear_down_entry(iommu, dev, pasid, pte,
+				      INTEL_PASID_TEARDOWN_DRAIN_PRQ);
 
+	spin_lock(&iommu->lock);
 	pasid_clear_entry(pte);
 
 	/* Setup the first level page table pointer: */
@@ -407,16 +419,15 @@ int intel_pasid_setup_second_level(struct intel_iommu *iommu,
 
 	spin_lock(&iommu->lock);
 	pte = intel_pasid_get_entry(dev, pasid);
-	if (!pte) {
-		spin_unlock(&iommu->lock);
+	spin_unlock(&iommu->lock);
+	if (!pte)
 		return -ENODEV;
-	}
 
-	if (pasid_pte_is_present(pte)) {
-		spin_unlock(&iommu->lock);
-		return -EBUSY;
-	}
+	/* Destroy the old configuration if it already exists */
+	__intel_pasid_tear_down_entry(iommu, dev, pasid, pte,
+				      INTEL_PASID_TEARDOWN_DRAIN_PRQ);
 
+	spin_lock(&iommu->lock);
 	pasid_clear_entry(pte);
 	pasid_set_domain_id(pte, did);
 	pasid_set_slptr(pte, pgd_val);
@@ -515,16 +526,16 @@ int intel_pasid_setup_pass_through(struct intel_iommu *iommu,
 
 	spin_lock(&iommu->lock);
 	pte = intel_pasid_get_entry(dev, pasid);
-	if (!pte) {
-		spin_unlock(&iommu->lock);
+	spin_unlock(&iommu->lock);
+	if (!pte)
 		return -ENODEV;
-	}
 
-	if (pasid_pte_is_present(pte)) {
-		spin_unlock(&iommu->lock);
-		return -EBUSY;
-	}
 
+	/* Destroy the old configuration if it already exists */
+	__intel_pasid_tear_down_entry(iommu, dev, pasid, pte,
+				      INTEL_PASID_TEARDOWN_DRAIN_PRQ);
+
+	spin_lock(&iommu->lock);
 	pasid_clear_entry(pte);
 	pasid_set_domain_id(pte, did);
 	pasid_set_address_width(pte, iommu->agaw);
@@ -631,15 +642,15 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
 
 	spin_lock(&iommu->lock);
 	pte = intel_pasid_get_entry(dev, pasid);
-	if (!pte) {
-		spin_unlock(&iommu->lock);
+	spin_unlock(&iommu->lock);
+	if (!pte)
 		return -ENODEV;
-	}
-	if (pasid_pte_is_present(pte)) {
-		spin_unlock(&iommu->lock);
-		return -EBUSY;
-	}
 
+	/* Destroy the old configuration if it already exists */
+	__intel_pasid_tear_down_entry(iommu, dev, pasid, pte,
+				      INTEL_PASID_TEARDOWN_DRAIN_PRQ);
+
+	spin_lock(&iommu->lock);
 	pasid_clear_entry(pte);
 
 	if (s1_cfg->addr_width == ADDR_WIDTH_5LEVEL)
