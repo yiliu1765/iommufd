@@ -239,9 +239,12 @@ devtlb_invalidation_with_pasid(struct intel_iommu *iommu,
 /*
  * Caller can request to drain PRQ in this helper if it hasn't done so,
  * e.g. in a path which doesn't follow remove_dev_pasid().
+ * Return the pasid entry pointer if the entry is found or NULL if no
+ * entry found.
  */
-void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
-				 u32 pasid, u32 flags)
+struct pasid_entry *
+intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
+			    u32 pasid, u32 flags)
 {
 	struct pasid_entry *pte;
 	u16 did, pgtt;
@@ -250,7 +253,7 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 	pte = intel_pasid_get_entry(dev, pasid);
 	if (WARN_ON(!pte) || !pasid_pte_is_present(pte)) {
 		spin_unlock(&iommu->lock);
-		return;
+		goto out;
 	}
 
 	did = pasid_get_domain_id(pte);
@@ -273,6 +276,8 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 
 	if (flags & INTEL_PASID_TEARDOWN_DRAIN_PRQ)
 		intel_drain_pasid_prq(dev, pasid);
+out:
+	return pte;
 }
 
 /*
