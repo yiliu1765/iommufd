@@ -1122,9 +1122,24 @@ bool iommu_group_dma_owner_claimed(struct iommu_group *group);
 int iommu_device_claim_dma_owner(struct device *dev, void *owner);
 void iommu_device_release_dma_owner(struct device *dev);
 
-int iommu_attach_device_pasid(struct iommu_domain *domain,
-			      struct device *dev, ioasid_t pasid,
-			      struct iommu_attach_handle *handle);
+int __iommu_attach_device_pasid(struct iommu_domain *domain,
+				struct device *dev, ioasid_t pasid,
+				struct iommu_attach_handle *handle);
+
+static inline int iommu_attach_device_pasid(struct iommu_domain *domain,
+					    struct device *dev, ioasid_t pasid)
+{
+	return __iommu_attach_device_pasid(domain, dev, pasid, NULL);
+}
+
+static inline int
+iommu_attach_device_pasid_handle(struct iommu_domain *domain,
+				 struct device *dev, ioasid_t pasid,
+				 struct iommu_attach_handle *handle)
+{
+	return __iommu_attach_device_pasid(domain, dev, pasid, handle);
+}
+
 void iommu_detach_device_pasid(struct iommu_domain *domain,
 			       struct device *dev, ioasid_t pasid);
 ioasid_t iommu_alloc_global_pasid(struct device *dev);
@@ -1139,6 +1154,8 @@ struct iommu_fault_param {};
 struct iommu_iotlb_gather {};
 struct iommu_dirty_bitmap {};
 struct iommu_dirty_ops {};
+struct iommu_attach_handle {};
+
 
 static inline bool device_iommu_capable(struct device *dev, enum iommu_cap cap)
 {
@@ -1451,8 +1468,15 @@ static inline int iommu_device_claim_dma_owner(struct device *dev, void *owner)
 }
 
 static inline int iommu_attach_device_pasid(struct iommu_domain *domain,
-					    struct device *dev, ioasid_t pasid,
-					    struct iommu_attach_handle *handle)
+					    struct device *dev, ioasid_t pasid)
+{
+	return -ENODEV;
+}
+
+static inline int
+iommu_attach_device_pasid_handle(struct iommu_domain *domain,
+				 struct device *dev, ioasid_t pasid,
+				 struct iommu_attach_handle *handle)
 {
 	return -ENODEV;
 }
