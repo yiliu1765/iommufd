@@ -115,8 +115,9 @@ struct iommu_sva *iommu_sva_bind_device(struct device *dev, struct mm_struct *mm
 
 	/* Search for an existing domain. */
 	list_for_each_entry(domain, &mm->iommu_mm->sva_domains, next) {
-		ret = iommu_attach_device_pasid(domain, dev, iommu_mm->pasid,
-						&handle->handle);
+		ret = iommu_attach_device_pasid_handle(domain, dev,
+						       iommu_mm->pasid,
+						       &handle->handle);
 		if (!ret) {
 			domain->users++;
 			goto out;
@@ -130,8 +131,9 @@ struct iommu_sva *iommu_sva_bind_device(struct device *dev, struct mm_struct *mm
 		goto out_free_handle;
 	}
 
-	ret = iommu_attach_device_pasid(domain, dev, iommu_mm->pasid,
-					&handle->handle);
+	ret = iommu_attach_device_pasid_handle(domain, dev,
+					       iommu_mm->pasid,
+					       &handle->handle);
 	if (ret)
 		goto out_free_domain;
 	domain->users = 1;
