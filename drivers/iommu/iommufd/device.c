@@ -779,6 +779,7 @@ iommufd_device_auto_get_domain(struct iommufd_device *idev, ioasid_t pasid,
 	struct iommufd_hw_pagetable *destroy_hwpt;
 	struct iommufd_hwpt_paging *hwpt_paging;
 	struct iommufd_hw_pagetable *hwpt;
+	u32 flags = 0;
 
 	/*
 	 * There is no differentiation when domains are allocated, so any domain
@@ -811,8 +812,10 @@ iommufd_device_auto_get_domain(struct iommufd_device *idev, ioasid_t pasid,
 		goto out_unlock;
 	}
 
+	if (pasid != IOMMU_NO_PASID || idev->dev->iommu->max_pasids)
+		flags = IOMMU_HWPT_ALLOC_PASID;
 	hwpt_paging = iommufd_hwpt_paging_alloc(idev->ictx, ioas, idev, pasid,
-						0, immediate_attach, NULL);
+						flags, immediate_attach, NULL);
 	if (IS_ERR(hwpt_paging)) {
 		destroy_hwpt = ERR_CAST(hwpt_paging);
 		goto out_unlock;
