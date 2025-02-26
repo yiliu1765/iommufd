@@ -392,6 +392,9 @@ struct iommu_vfio_ioas {
  *                          Any domain attached to the non-PASID part of the
  *                          device must also be flagged, otherwise attaching a
  *                          PASID will blocked.
+ *                          For the user that wants to attach PASID, it should
+ *                          attach its RID to a domain flagged. It should not
+ *                          use the auto-allocated domain by kernel on RID.
  *                          If IOMMU does not support PASID it will return
  *                          error (-EOPNOTSUPP).
  */
