@@ -921,7 +921,7 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 	}
 	sobj->idev.idev = idev;
 
-	rc = iommufd_device_attach(idev, &pt_id);
+	rc = iommufd_device_attach(idev, IOMMU_NO_PASID, &pt_id);
 	if (rc)
 		goto out_unbind;
 
@@ -936,7 +936,7 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 	return 0;
 
 out_detach:
-	iommufd_device_detach(idev);
+	iommufd_device_detach(idev, IOMMU_NO_PASID);
 out_unbind:
 	iommufd_device_unbind(idev);
 out_mdev:
@@ -970,7 +970,7 @@ static int iommufd_test_mock_domain_replace(struct iommufd_ucmd *ucmd,
 		goto out_dev_obj;
 	}
 
-	rc = iommufd_device_replace(sobj->idev.idev, &pt_id);
+	rc = iommufd_device_replace(sobj->idev.idev, IOMMU_NO_PASID, &pt_id);
 	if (rc)
 		goto out_dev_obj;
 
@@ -1603,7 +1603,7 @@ void iommufd_selftest_destroy(struct iommufd_object *obj)
 
 	switch (sobj->type) {
 	case TYPE_IDEV:
-		iommufd_device_detach(sobj->idev.idev);
+		iommufd_device_detach(sobj->idev.idev, IOMMU_NO_PASID);
 		iommufd_device_unbind(sobj->idev.idev);
 		mock_dev_destroy(sobj->idev.mock_dev);
 		break;
