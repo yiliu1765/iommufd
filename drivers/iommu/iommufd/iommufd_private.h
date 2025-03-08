@@ -404,9 +404,9 @@ struct iommufd_group {
 	struct iommufd_ctx *ictx;
 	struct iommu_group *group;
 	struct iommufd_attach_handle *handle;
-	struct list_head device_list;
 	struct iommufd_sw_msi_maps required_sw_msi;
 	phys_addr_t sw_msi_start;
+	struct xarray device_array;
 };
 
 /*
