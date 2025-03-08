@@ -406,7 +406,6 @@ struct iommufd_group {
 	struct iommufd_attach_handle *handle;
 	struct iommufd_sw_msi_maps required_sw_msi;
 	phys_addr_t sw_msi_start;
-	struct xarray device_array;
 };
 
 /*
@@ -503,6 +502,7 @@ struct iommufd_attach_handle {
 	struct iommu_attach_handle handle;
 	struct iommufd_device *idev;
 	struct iommufd_hw_pagetable *hwpt;
+	struct xarray device_array;
 };
 
 /* Convert an iommu attach handle to iommufd handle. */
