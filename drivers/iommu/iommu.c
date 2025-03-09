@@ -2161,6 +2161,13 @@ static void *iommu_make_pasid_array_entry(struct iommu_domain *domain,
 	return xa_tag_pointer(domain, IOMMU_PASID_ARRAY_DOMAIN);
 }
 
+static void iommu_pasid_array_entry_clear_handle(void *entry)
+{
+	if (xa_pointer_tag(entry) == IOMMU_PASID_ARRAY_HANDLE)
+		((struct iommu_attach_handle *)
+		 xa_untag_pointer(entry))->domain = NULL;
+}
+
 static int __iommu_attach_group(struct iommu_domain *domain,
 				struct iommu_group *group)
 {
@@ -3431,10 +3438,13 @@ void iommu_detach_device_pasid(struct iommu_domain *domain, struct device *dev,
 {
 	/* Caller must be a probed driver on dev */
 	struct iommu_group *group = dev->iommu_group;
+	void *entry;
 
 	mutex_lock(&group->mutex);
 	__iommu_remove_group_pasid(group, pasid, domain);
-	xa_erase(&group->pasid_array, pasid);
+	entry = xa_erase(&group->pasid_array, pasid);
+	WARN_ON(!entry);
+	iommu_pasid_array_entry_clear_handle(entry);
 	mutex_unlock(&group->mutex);
 }
 EXPORT_SYMBOL_GPL(iommu_detach_device_pasid);
@@ -3562,9 +3572,13 @@ EXPORT_SYMBOL_NS_GPL(iommu_attach_group_handle, "IOMMUFD_INTERNAL");
 void iommu_detach_group_handle(struct iommu_domain *domain,
 			       struct iommu_group *group)
 {
+	void *entry;
+
 	mutex_lock(&group->mutex);
 	__iommu_group_set_core_domain(group);
-	xa_erase(&group->pasid_array, IOMMU_NO_PASID);
+	entry = xa_erase(&group->pasid_array, IOMMU_NO_PASID);
+	WARN_ON(!entry);
+	iommu_pasid_array_entry_clear_handle(entry);
 	mutex_unlock(&group->mutex);
 }
 EXPORT_SYMBOL_NS_GPL(iommu_detach_group_handle, "IOMMUFD_INTERNAL");
