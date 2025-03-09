@@ -396,12 +396,14 @@ static inline void iommufd_hw_pagetable_put(struct iommufd_ctx *ictx,
 	refcount_dec(&hwpt->obj.users);
 }
 
+struct iommufd_attach_handle;
+
 struct iommufd_group {
 	struct kref ref;
 	struct mutex lock;
 	struct iommufd_ctx *ictx;
 	struct iommu_group *group;
-	struct iommufd_hw_pagetable *hwpt;
+	struct iommufd_attach_handle *handle;
 	struct list_head device_list;
 	struct iommufd_sw_msi_maps required_sw_msi;
 	phys_addr_t sw_msi_start;
@@ -500,6 +502,7 @@ static inline void iommufd_fault_deliver_restore(struct iommufd_fault *fault,
 struct iommufd_attach_handle {
 	struct iommu_attach_handle handle;
 	struct iommufd_device *idev;
+	struct iommufd_hw_pagetable *hwpt;
 };
 
 /* Convert an iommu attach handle to iommufd handle. */
