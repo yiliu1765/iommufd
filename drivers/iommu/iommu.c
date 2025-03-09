@@ -3431,10 +3431,12 @@ void iommu_detach_device_pasid(struct iommu_domain *domain, struct device *dev,
 {
 	/* Caller must be a probed driver on dev */
 	struct iommu_group *group = dev->iommu_group;
+	struct iommu_attach_handle *handle;
 
 	mutex_lock(&group->mutex);
 	__iommu_remove_group_pasid(group, pasid, domain);
-	xa_erase(&group->pasid_array, pasid);
+	handle = xa_erase(&group->pasid_array, pasid);
+	handle->domain = NULL;
 	mutex_unlock(&group->mutex);
 }
 EXPORT_SYMBOL_GPL(iommu_detach_device_pasid);
@@ -3562,9 +3564,12 @@ EXPORT_SYMBOL_NS_GPL(iommu_attach_group_handle, "IOMMUFD_INTERNAL");
 void iommu_detach_group_handle(struct iommu_domain *domain,
 			       struct iommu_group *group)
 {
+	struct iommu_attach_handle *handle;
+
 	mutex_lock(&group->mutex);
 	__iommu_group_set_core_domain(group);
-	xa_erase(&group->pasid_array, IOMMU_NO_PASID);
+	handle = xa_erase(&group->pasid_array, IOMMU_NO_PASID);
+	handle->domain = NULL;
 	mutex_unlock(&group->mutex);
 }
 EXPORT_SYMBOL_NS_GPL(iommu_detach_group_handle, "IOMMUFD_INTERNAL");
