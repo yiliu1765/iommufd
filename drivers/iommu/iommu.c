@@ -2168,6 +2168,22 @@ static void iommu_pasid_array_entry_clear_handle(void *entry)
 		 xa_untag_pointer(entry))->domain = NULL;
 }
 
+/* Caller should have reserved memory for __xa_store() */
+static void iommu_group_pasid_store(struct iommu_group *group, ioasid_t pasid,
+				    struct iommu_domain *domain,
+				    struct iommu_attach_handle *handle)
+{
+	void *entry;
+
+	lockdep_assert_held(&group->mutex);
+
+	xa_lock(&group->pasid_array);
+	entry = iommu_make_pasid_array_entry(domain, handle);
+	WARN_ON(xa_is_err(__xa_store(&group->pasid_array, pasid, entry,
+				     GFP_KERNEL)));
+	xa_unlock(&group->pasid_array);
+}
+
 static int __iommu_attach_group(struct iommu_domain *domain,
 				struct iommu_group *group)
 {
@@ -3369,7 +3385,6 @@ int iommu_attach_device_pasid(struct iommu_domain *domain,
 	struct iommu_group *group = dev->iommu_group;
 	struct group_device *device;
 	const struct iommu_ops *ops;
-	void *entry;
 	int ret;
 
 	if (!group)
@@ -3393,8 +3408,6 @@ int iommu_attach_device_pasid(struct iommu_domain *domain,
 		}
 	}
 
-	entry = iommu_make_pasid_array_entry(domain, handle);
-
 	/*
 	 * Entry present is a failure case. Use xa_insert() instead of
 	 * xa_reserve().
@@ -3415,8 +3428,7 @@ int iommu_attach_device_pasid(struct iommu_domain *domain,
 	 * operation succeeds as we cannot tolerate PRIs becoming concurrently
 	 * queued and then failing attach.
 	 */
-	WARN_ON(xa_is_err(xa_store(&group->pasid_array,
-				   pasid, entry, GFP_KERNEL)));
+	iommu_group_pasid_store(group, pasid, domain, handle);
 
 out_unlock:
 	mutex_unlock(&group->mutex);
@@ -3527,14 +3539,12 @@ int iommu_attach_group_handle(struct iommu_domain *domain,
 			      struct iommu_group *group,
 			      struct iommu_attach_handle *handle)
 {
-	void *entry;
 	int ret;
 
 	if (!handle)
 		return -EINVAL;
 
 	mutex_lock(&group->mutex);
-	entry = iommu_make_pasid_array_entry(domain, handle);
 	ret = xa_insert(&group->pasid_array,
 			IOMMU_NO_PASID, XA_ZERO_ENTRY, GFP_KERNEL);
 	if (ret)
@@ -3552,8 +3562,7 @@ int iommu_attach_group_handle(struct iommu_domain *domain,
 	 * operation succeeds as we cannot tolerate PRIs becoming concurrently
 	 * queued and then failing attach.
 	 */
-	WARN_ON(xa_is_err(xa_store(&group->pasid_array,
-				   IOMMU_NO_PASID, entry, GFP_KERNEL)));
+	iommu_group_pasid_store(group, IOMMU_NO_PASID, domain, handle);
 
 out_unlock:
 	mutex_unlock(&group->mutex);
@@ -3600,14 +3609,12 @@ int iommu_replace_group_handle(struct iommu_group *group,
 			       struct iommu_domain *new_domain,
 			       struct iommu_attach_handle *handle)
 {
-	void *curr, *entry;
 	int ret;
 
 	if (!new_domain || !handle)
 		return -EINVAL;
 
 	mutex_lock(&group->mutex);
-	entry = iommu_make_pasid_array_entry(new_domain, handle);
 	ret = xa_reserve(&group->pasid_array, IOMMU_NO_PASID, GFP_KERNEL);
 	if (ret)
 		goto err_unlock;
@@ -3616,8 +3623,7 @@ int iommu_replace_group_handle(struct iommu_group *group,
 	if (ret)
 		goto err_release;
 
-	curr = xa_store(&group->pasid_array, IOMMU_NO_PASID, entry, GFP_KERNEL);
-	WARN_ON(xa_is_err(curr));
+	iommu_group_pasid_store(group, IOMMU_NO_PASID, new_domain, handle);
 
 	mutex_unlock(&group->mutex);
 
