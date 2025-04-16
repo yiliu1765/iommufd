@@ -428,6 +428,7 @@ struct iommufd_device {
 	/* protect iopf_enabled counter */
 	struct mutex iopf_lock;
 	unsigned int iopf_enabled;
+	unsigned int flags;
 };
 
 static inline struct iommufd_device *
