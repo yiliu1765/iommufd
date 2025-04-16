@@ -142,7 +142,8 @@ void iommufd_device_destroy(struct iommufd_object *obj)
 	struct iommufd_device *idev =
 		container_of(obj, struct iommufd_device, obj);
 
-	iommu_device_release_dma_owner(idev->dev);
+	if (!(idev->flags & IOMMUFD_BIND_FLAGS_PASID))
+		iommu_device_release_dma_owner(idev->dev);
 	iommufd_put_group(idev->igroup);
 	if (!iommufd_selftest_is_mock_dev(idev->dev))
 		iommufd_ctx_put(idev->ictx);
@@ -165,7 +166,8 @@ void iommufd_device_destroy(struct iommufd_object *obj)
  * The caller must undo this with iommufd_device_unbind()
  */
 struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
-					   struct device *dev, u32 *id)
+					   struct device *dev,
+					   unsigned int flags, u32 *id)
 {
 	struct iommufd_device *idev;
 	struct iommufd_group *igroup;
@@ -202,9 +204,11 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 			"Use the \"allow_unsafe_interrupts\" module parameter to override\n");
 	}
 
-	rc = iommu_device_claim_dma_owner(dev, ictx);
-	if (rc)
-		goto out_group_put;
+	if (!(flags & IOMMUFD_BIND_FLAGS_PASID)) {
+		rc = iommu_device_claim_dma_owner(dev, ictx);
+		if (rc)
+			goto out_group_put;
+	}
 
 	idev = iommufd_object_alloc(ictx, idev, IOMMUFD_OBJ_DEVICE);
 	if (IS_ERR(idev)) {
@@ -217,6 +221,7 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 	idev->dev = dev;
 	idev->enforce_cache_coherency =
 		device_iommu_capable(dev, IOMMU_CAP_ENFORCE_CACHE_COHERENCY);
+	idev->flags = flags;
 	/* The calling driver is a user until iommufd_device_unbind() */
 	refcount_inc(&idev->obj.users);
 	/* igroup refcount moves into iommufd_device */
@@ -234,7 +239,8 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 	return idev;
 
 out_release_owner:
-	iommu_device_release_dma_owner(dev);
+	if (!(flags & IOMMUFD_BIND_FLAGS_PASID))
+		iommu_device_release_dma_owner(dev);
 out_group_put:
 	iommufd_put_group(igroup);
 	return ERR_PTR(rc);
