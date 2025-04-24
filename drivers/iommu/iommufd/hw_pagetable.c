@@ -343,6 +343,7 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 	};
 	struct iommufd_hw_pagetable *hwpt;
 	struct iommufd_ioas *ioas = NULL;
+	unsigned int flags = cmd->flags;
 	struct iommufd_object *pt_obj;
 	struct iommufd_device *idev;
 	int rc;
@@ -363,13 +364,16 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 		goto out_put_idev;
 	}
 
+	if (idev->flags & IOMMUFD_BIND_FLAGS_PASID)
+		flags |= IOMMU_HWPT_ALLOC_PASID;
+
 	if (pt_obj->type == IOMMUFD_OBJ_IOAS) {
 		struct iommufd_hwpt_paging *hwpt_paging;
 
 		ioas = container_of(pt_obj, struct iommufd_ioas, obj);
 		mutex_lock(&ioas->mutex);
 		hwpt_paging = iommufd_hwpt_paging_alloc(
-			ucmd->ictx, ioas, idev, IOMMU_NO_PASID, cmd->flags,
+			ucmd->ictx, ioas, idev, IOMMU_NO_PASID, flags,
 			false, user_data.len ? &user_data : NULL);
 		if (IS_ERR(hwpt_paging)) {
 			rc = PTR_ERR(hwpt_paging);
@@ -383,7 +387,7 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 			ucmd->ictx,
 			container_of(pt_obj, struct iommufd_hwpt_paging,
 				     common.obj),
-			idev, cmd->flags, &user_data);
+			idev, flags, &user_data);
 		if (IS_ERR(hwpt_nested)) {
 			rc = PTR_ERR(hwpt_nested);
 			goto out_unlock;
@@ -399,7 +403,7 @@ int iommufd_hwpt_alloc(struct iommufd_ucmd *ucmd)
 			goto out_unlock;
 		}
 		hwpt_nested = iommufd_viommu_alloc_hwpt_nested(
-			viommu, cmd->flags, &user_data);
+			viommu, flags, &user_data);
 		if (IS_ERR(hwpt_nested)) {
 			rc = PTR_ERR(hwpt_nested);
 			goto out_unlock;
