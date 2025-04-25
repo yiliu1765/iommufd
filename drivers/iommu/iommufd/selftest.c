@@ -168,6 +168,7 @@ struct mock_dev {
 	int id;
 	u32 cache[MOCK_DEV_CACHE_NUM];
 	atomic_t pasid_1024_fake_error;
+	bool pasid_vdev;
 };
 
 static inline struct mock_dev *to_mock_dev(struct device *dev)
@@ -908,11 +909,16 @@ static struct mock_dev *mock_dev_create(unsigned long dev_flags)
 	};
 	const u32 valid_flags = MOCK_FLAGS_DEVICE_NO_DIRTY |
 				MOCK_FLAGS_DEVICE_HUGE_IOVA |
-				MOCK_FLAGS_DEVICE_PASID;
+				MOCK_FLAGS_DEVICE_PASID |
+				MOCK_FLAGS_DEVICE_SIOV;
 	struct mock_dev *mdev;
 	int rc, i;
 
 	if (dev_flags & ~valid_flags)
+		return ERR_PTR(-EINVAL);
+
+	if ((dev_flags & MOCK_FLAGS_DEVICE_SIOV) &&
+	    !(dev_flags & MOCK_FLAGS_DEVICE_PASID))
 		return ERR_PTR(-EINVAL);
 
 	mdev = kzalloc(sizeof(*mdev), GFP_KERNEL);
@@ -948,6 +954,7 @@ static struct mock_dev *mock_dev_create(unsigned long dev_flags)
 	rc = device_add(&mdev->dev);
 	if (rc)
 		goto err_put;
+	mdev->pasid_vdev = dev_flags & MOCK_FLAGS_DEVICE_SIOV;
 	return mdev;
 
 err_put:
@@ -969,11 +976,13 @@ bool iommufd_selftest_is_mock_dev(struct device *dev)
 static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 				    struct iommu_test_cmd *cmd)
 {
+	ioasid_t pasid = IOMMU_NO_PASID;
 	struct iommufd_device *idev;
 	struct selftest_obj *sobj;
 	u32 pt_id = cmd->id;
 	u32 dev_flags = 0;
 	u32 idev_id;
+	bool siov;
 	int rc;
 
 	sobj = iommufd_object_alloc(ucmd->ictx, sobj, IOMMUFD_OBJ_SELFTEST);
@@ -992,15 +1001,20 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 		goto out_sobj;
 	}
 
+	siov = dev_flags & MOCK_FLAGS_DEVICE_SIOV;
 	idev = iommufd_device_bind(ucmd->ictx, &sobj->idev.mock_dev->dev,
-				   0, &idev_id);
+				   siov ? IOMMUFD_BIND_FLAGS_PASID : 0,
+				   &idev_id);
 	if (IS_ERR(idev)) {
 		rc = PTR_ERR(idev);
 		goto out_mdev;
 	}
 	sobj->idev.idev = idev;
 
-	rc = iommufd_device_attach(idev, IOMMU_NO_PASID, &pt_id);
+	if (siov)
+		pasid = IOMMU_TEST_SIOV_PASID;
+
+	rc = iommufd_device_attach(idev, pasid, &pt_id);
 	if (rc)
 		goto out_unbind;
 
@@ -1015,7 +1029,7 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 	return 0;
 
 out_detach:
-	iommufd_device_detach(idev, IOMMU_NO_PASID);
+	iommufd_device_detach(idev, pasid);
 out_unbind:
 	iommufd_device_unbind(idev);
 out_mdev:
@@ -1059,7 +1073,10 @@ static int iommufd_test_mock_domain_replace(struct iommufd_ucmd *ucmd,
 	if (IS_ERR(sobj))
 		return PTR_ERR(sobj);
 
-	rc = iommufd_device_replace(sobj->idev.idev, IOMMU_NO_PASID, &pt_id);
+	rc = iommufd_device_replace(sobj->idev.idev,
+				    sobj->idev.mock_dev->pasid_vdev ?
+				    IOMMU_TEST_SIOV_PASID : IOMMU_NO_PASID,
+				    &pt_id);
 	if (rc)
 		goto out_sobj;
 
@@ -1788,6 +1805,12 @@ static int iommufd_test_pasid_attach(struct iommufd_ucmd *ucmd,
 	if (IS_ERR(sobj))
 		return PTR_ERR(sobj);
 
+	/* mock vdev has not reported pasid cap, hence failt pasid attach */
+	if (sobj->idev.mock_dev->pasid_vdev) {
+		rc = -EINVAL;
+		goto out_sobj;
+	}
+
 	rc = iommufd_device_attach(sobj->idev.idev, cmd->pasid_attach.pasid,
 				   &cmd->pasid_attach.pt_id);
 	if (rc)
@@ -1812,6 +1835,12 @@ static int iommufd_test_pasid_replace(struct iommufd_ucmd *ucmd,
 	sobj = iommufd_test_get_selftest_obj(ucmd->ictx, cmd->id);
 	if (IS_ERR(sobj))
 		return PTR_ERR(sobj);
+
+	/* mock vdev has not reported pasid cap, hence failt pasid replace */
+	if (sobj->idev.mock_dev->pasid_vdev) {
+		rc = -EINVAL;
+		goto out_sobj;
+	}
 
 	rc = iommufd_device_replace(sobj->idev.idev, cmd->pasid_attach.pasid,
 				    &cmd->pasid_attach.pt_id);
@@ -1845,7 +1874,9 @@ void iommufd_selftest_destroy(struct iommufd_object *obj)
 
 	switch (sobj->type) {
 	case TYPE_IDEV:
-		iommufd_device_detach(sobj->idev.idev, IOMMU_NO_PASID);
+		iommufd_device_detach(sobj->idev.idev,
+				      sobj->idev.mock_dev->pasid_vdev ?
+				      IOMMU_TEST_SIOV_PASID : IOMMU_NO_PASID);
 		iommufd_device_unbind(sobj->idev.idev);
 		mock_dev_destroy(sobj->idev.mock_dev);
 		break;

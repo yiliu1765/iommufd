@@ -3321,4 +3321,114 @@ TEST_F(iommufd_device_pasid, pasid_attach)
 	test_cmd_mock_domain_replace(self->stdev_id, self->ioas_id);
 }
 
+FIXTURE(iommufd_device_siov)
+{
+	int fd;
+	uint32_t ioas_id;
+	uint32_t hwpt_id;
+	uint32_t stdev_id;
+	uint32_t device_id;
+};
+
+FIXTURE_SETUP(iommufd_device_siov)
+{
+	self->fd = open("/dev/iommu", O_RDWR);
+	ASSERT_NE(-1, self->fd);
+	test_ioctl_ioas_alloc(&self->ioas_id);
+
+	test_cmd_mock_domain_flags(self->ioas_id,
+				   MOCK_FLAGS_DEVICE_PASID |
+					MOCK_FLAGS_DEVICE_SIOV,
+				   &self->stdev_id, &self->hwpt_id,
+				   &self->device_id);
+}
+
+FIXTURE_TEARDOWN(iommufd_device_siov)
+{
+	teardown_iommufd(self->fd, _metadata);
+}
+
+TEST_F(iommufd_device_siov, siov)
+{
+	struct iommu_hwpt_selftest data = {
+		.iotlb =  IOMMU_TEST_IOTLB_DEFAULT,
+	};
+	uint32_t nested_hwpt_id[3] = {};
+	uint32_t parent_hwpt_id = 0;
+	uint32_t fault_id, fault_fd;
+	uint32_t s2_hwpt_id = 0;
+	uint32_t iopf_hwpt_id;
+	uint32_t pasid = 100;
+	uint32_t viommu_id;
+
+	/* Allocate two nested hwpts sharing one common parent hwpt */
+	test_cmd_hwpt_alloc(self->device_id, self->ioas_id,
+			    IOMMU_HWPT_ALLOC_NEST_PARENT,
+			    &parent_hwpt_id);
+	test_cmd_hwpt_alloc_nested(self->device_id, parent_hwpt_id,
+				   IOMMU_HWPT_ALLOC_PASID,
+				   &nested_hwpt_id[0],
+				   IOMMU_HWPT_DATA_SELFTEST,
+				   &data, sizeof(data));
+	test_cmd_hwpt_alloc_nested(self->device_id, parent_hwpt_id,
+				   IOMMU_HWPT_ALLOC_PASID,
+				   &nested_hwpt_id[1],
+				   IOMMU_HWPT_DATA_SELFTEST,
+				   &data, sizeof(data));
+
+	/* Fault related preparation */
+	test_ioctl_fault_alloc(&fault_id, &fault_fd);
+	test_cmd_hwpt_alloc_iopf(self->device_id, parent_hwpt_id, fault_id,
+				 IOMMU_HWPT_FAULT_ID_VALID | IOMMU_HWPT_ALLOC_PASID,
+				 &iopf_hwpt_id,
+				 IOMMU_HWPT_DATA_SELFTEST, &data,
+				 sizeof(data));
+
+	/* Allocate a regular nested hwpt based on viommu */
+	test_cmd_viommu_alloc(self->device_id, parent_hwpt_id,
+			      IOMMU_VIOMMU_TYPE_SELFTEST,
+			      &viommu_id);
+	test_cmd_hwpt_alloc_nested(self->device_id, viommu_id,
+				   IOMMU_HWPT_ALLOC_PASID,
+				   &nested_hwpt_id[2],
+				   IOMMU_HWPT_DATA_SELFTEST, &data,
+				   sizeof(data));
+
+	test_cmd_hwpt_alloc(self->device_id, self->ioas_id,
+			    IOMMU_HWPT_ALLOC_PASID,
+			    &s2_hwpt_id);
+
+	/* Attach vdev to non-pasid compat domain, should succeed */
+	test_cmd_mock_domain_replace(self->stdev_id, parent_hwpt_id);
+	test_cmd_mock_domain_replace(self->stdev_id, s2_hwpt_id);
+	test_cmd_mock_domain_replace(self->stdev_id, nested_hwpt_id[0]);
+	test_cmd_mock_domain_replace(self->stdev_id, nested_hwpt_id[1]);
+	test_cmd_mock_domain_replace(self->stdev_id, nested_hwpt_id[2]);
+
+	/* Attach vdev pasid should fail */
+	test_err_pasid_attach(EINVAL, pasid, parent_hwpt_id);
+	test_err_pasid_attach(EINVAL, pasid, s2_hwpt_id);
+	test_err_pasid_attach(EINVAL, pasid, nested_hwpt_id[0]);
+	test_err_pasid_attach(EINVAL, pasid, nested_hwpt_id[1]);
+	test_err_pasid_attach(EINVAL, pasid, nested_hwpt_id[2]);
+
+	test_err_pasid_replace(EINVAL, pasid, parent_hwpt_id);
+	test_err_pasid_replace(EINVAL, pasid, s2_hwpt_id);
+	test_err_pasid_replace(EINVAL, pasid, nested_hwpt_id[0]);
+	test_err_pasid_replace(EINVAL, pasid, nested_hwpt_id[1]);
+	test_err_pasid_replace(EINVAL, pasid, nested_hwpt_id[2]);
+
+	test_cmd_mock_domain_replace(self->stdev_id, iopf_hwpt_id);
+
+	test_cmd_trigger_iopf_pasid(self->device_id, IOMMU_TEST_SIOV_PASID,
+				    fault_fd);
+
+	/* Attach vdev back to ioas */
+	test_cmd_mock_domain_replace(self->stdev_id, self->ioas_id);
+
+	test_ioctl_destroy(iopf_hwpt_id);
+	close(fault_fd);
+	test_ioctl_destroy(fault_id);
+}
+
 TEST_HARNESS_MAIN

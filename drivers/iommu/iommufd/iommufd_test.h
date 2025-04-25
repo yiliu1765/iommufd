@@ -54,6 +54,7 @@ enum {
 	MOCK_FLAGS_DEVICE_NO_DIRTY = 1 << 0,
 	MOCK_FLAGS_DEVICE_HUGE_IOVA = 1 << 1,
 	MOCK_FLAGS_DEVICE_PASID = 1 << 2,
+	MOCK_FLAGS_DEVICE_SIOV = 1 << 3,
 };
 
 enum {
@@ -68,6 +69,9 @@ enum {
 
 /* Reserved for special pasid replace test */
 #define IOMMU_TEST_PASID_RESERVED 1024
+
+/* Reserved for SIOV test */
+#define IOMMU_TEST_SIOV_PASID 4096
 
 struct iommu_test_cmd {
 	__u32 size;
